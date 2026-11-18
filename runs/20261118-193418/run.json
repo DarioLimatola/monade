@@ -1,0 +1,15 @@
+{
+  "name": "20261118-193418",
+  "version": "0.3.0",
+  "started": "2026-11-18T19:34:18Z",
+  "os": "windows",
+  "arch": "x86_64",
+  "cpu": [
+    "popcnt",
+    "avx2"
+  ],
+  "threads": 20,
+  "passed": 10,
+  "failed": 0,
+  "micros": 324452
+}

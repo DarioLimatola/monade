@@ -57,6 +57,8 @@ crates/
     src/origin.rs     point 0: append-only log of foundations, EMPTY for now
     src/specs.rs      specifications: versioned history, locked seed
     src/size.rs       sizes 64 bits → 2 MB (powers of 8), arenas, Ref::ORIGIN
+    src/address.rs    octal address: root + base-8 path (down, up, offset, Morton
+                      point, packed 56 bits), Arena::part
     src/oracle.rs     slow references + state_hash() (tests / feature `oracle`)
   monade-run/         CLI, the only writer of point 0 and specs
     src/check.rs      `check`: 9 checks that say in words and numbers what they verified
@@ -89,6 +91,12 @@ prereg/ ladder/ properties/ worlds/ benches/   empty for now
 - **Sizes:** level 0 word (64 b), 1 block (512 b), 2 symbol (4096 b), 3, 4, 5,
   6 thought (2 MB). Defined recursively (one size = 8 of the one below); any other
   length is `Err`, never a panic.
+- **Octal address, packed 56 bits:** `Address` = root (< 2²⁸, which arena) + up to 8
+  base-8 digits (digit 0 = topmost split). A Monade of `8^e` bits (`e = level + 2`)
+  is a cube of side `2^e`; each digit is an octant (bit 0 → x, 1 → y, 2 → z), so the
+  path is the Morton order. Packed: digits bits 0–23 (top digit highest, unused 0),
+  depth 24–27, root 28–55, 56–63 zero; the top size is not packed. `Arena::part`
+  returns whole words only (a byte or a bit is an error for now).
 - **Majority:** a bit is set when more than half of the inputs are set; a tie gives 0.
 - **state_hash:** FNV-1a 64 over little-endian bytes; for comparing runs, not
   cryptographic. (The generated space, step 4, needs a cryptographic-quality hash.)
@@ -102,6 +110,7 @@ prereg/ ladder/ properties/ worlds/ benches/   empty for now
    invariants + fuzzing of the reader.
 3. ✅ Sizes, arenas, fast = slow.
 3b. ✅ `monade-run check` (readable results) + run folders + `monade-run report` (HTML).
+3c. ✅ Octal address (`address.rs`), with its check.
 4. Space: generated vectors from seed + address (Logos `GEN`); hash version 1 =
    BLAKE3 (official crate), keyed from the seed, context "monade space v1".
 5. Counters per bit: add, read by majority, certainty, residue (test 19).
@@ -145,3 +154,9 @@ cargo run -p monade-run -- set-spec KEY VALUE --motive M
   must appear on every machine: confirmed on Linux and on Windows (x86_64, AVX2,
   20 threads), all 9 checks passed. The alias is `cargo all`
   (older notes said `cargo ci`).
+- **2026-11-18 · v0.3.0.** Octal address (step 3c): `Address`, packed 56 bits,
+  Morton = path; slow references and property tests; 10th check `address.octal`.
+  Three levels decided (core in bits, integer GPU accelerator, continuous level
+  entering only by the sign bridge). Next: step 4 (generated space, BLAKE3).
+- **2026-11-18 · v0.3.1.** Detailed report (why, how, numbers, histograms, glossary).
+  v0.3.0 confirmed on Windows: 10/10, golden hashes unchanged.

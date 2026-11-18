@@ -128,9 +128,22 @@ Now 22 in potency; **8 summoned per session, by theme** (Decided: the same rule 
 
 BLAKE3 through the official `blake3` crate: keyed from the seed (context "monade space v1"), extendable output read in 64-byte blocks (one cache line per generated block, random access, lazy), the same function for content addresses (128 bits) and scars, separated by context. Verified against the official test vectors. Locked once chosen: changing it means a new mind.
 
+## 14c. Three levels: bits, integer GPU, the continuous (Decided 2026-11-18)
+
+| Level | Where | Arithmetic | What |
+|---|---|---|---|
+| 1. Core | CPU | bits and integers, deterministic | the mind: memory, impulse, Logos |
+| 2. Accelerator | GPU (`wgpu`) | **integers**, deterministic | the same operations (XOR, popcount, majority) on large batches: `MATCH` over millions of prototypes, sleep, Mutation evaluating many candidates, the force map; same state hash as the CPU (test 8) |
+| 3. The continuous | CPU or GPU | floating point | adapters (sound, images, embeddings), physical worlds, teachers, analysis and maps |
+
+- **Bridge (Charikar 2002):** a continuous vector enters the mind only as the **sign** of its projections on random hyperplanes generated from the seed (`GEN`); Hamming distance then measures the angle between the original vectors. The continuous level is a metatensor with a third algebra, sharing the same generated space.
+- **Rule:** floating point never enters the state of the mind nor its hash.
+- **Metrologist:** a single impulse (≤ 24 KB) stays on the CPU; the GPU only for large batches, and only when a measurement shows the bottleneck (after step 9).
+
 ## 15. The internal language: **Logos** (Decided: adopted and named; written after step 9 of the order of writing)
 
 - **A recipe is a program.** About 8 primitives: `GEN · LOAD · BIND · PERM · BUNDLE · MATCH · AND · CALL`. Each instruction is one 64-bit word (1 byte opcode, 7 bytes operands). **A program is a Monade** (code is data).
+- **Moving across levels, tensors and dimensions: the octal address (Decided 2026-11-18; built in v0.3.0 as `monade_core::address::Address`).** No ninth primitive: movement lives in the **address** that `LOAD` (and every reference) takes. An address is a root (which arena, i.e. which tensor) plus a **path of base-8 digits**, one per level, each choosing one of the 8 parts. **Down** = append a digit; **up** = drop the last digit; **another tensor** = another root; **another dimension or role** inside the same size = `PERM`. From a 2 MB Monade to a single bit: 8 digits = 24 bits, the same 24-bit path as an expert address (section 1): one addressing rule for experts, Monadi and bits. Each digit is an octant (bit 0 → x, 1 → y, 2 → z), so the path is the Morton order of the cube (section 9). **Packed form, 56 bits** (the 7 operand bytes of an instruction): digits in bits 0–23 (top digit highest, unused digits 0), depth in bits 24–27, root in bits 28–55, bits 56–63 zero; the top size is not packed (it belongs to the root's arena). Named `Address` rather than `Path` (it would clash with `std::path::Path`). Invariants (property-tested on every size): down/up, offset, point and packed round trips; fast = slow against a recursive reference; Morton is a bijection on 512 and 4096 bits and injective on a sample of 2 MB; lexicographic paths = increasing offsets; never a panic.
 - **One interpreter in the core**, shared; no compilation to machine code (it would need `unsafe`); no compiler copied into each Monade.
 - **Always terminates:** recursion depth at most 8 and a step budget (cost counted in 64-byte lines touched).
 - **Guard (Decided):** programs act only on data, never on the engine, point 0 or the specifications; programs written by the mind run in an enclosure until the author approves them.
@@ -153,3 +166,4 @@ BLAKE3 through the official `blake3` crate: keyed from the seed (context "monade
 1. Which Mutation form at which level.
 2. Detailed protocol of tests 17–21.
 3. Logos: the further mechanisms (up to 8); the functional design and inheritance rules (Proposed).
+4. ~~Octal path~~: decided and built (v0.3.0, `Address`, step 3c).
