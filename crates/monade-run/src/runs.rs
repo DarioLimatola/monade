@@ -183,7 +183,17 @@ mod tests {
                 name: "n".into(),
                 value: "1".into(),
             }],
+            why: String::new(),
+            how: String::new(),
+            charts: Vec::new(),
         }
+    }
+
+    #[test]
+    fn old_runs_without_explanations_still_load() {
+        let line = r#"{"id":"a","area":"w","claim":"c","result":"r","expected":"e","passed":true,"micros":1,"measures":[]}"#;
+        let o: Outcome = serde_json::from_str(line).unwrap();
+        assert!(o.why.is_empty() && o.charts.is_empty());
     }
 
     #[test]

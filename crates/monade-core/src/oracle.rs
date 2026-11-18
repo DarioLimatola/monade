@@ -111,6 +111,33 @@ pub fn size_from_bits(bits: u64) -> Option<Size> {
     }
 }
 
+/// Offset of an octal path, by recursion: split the range of `8^e` bits into 8
+/// equal parts, take part `digit`, repeat on it with the rest of the path.
+pub fn address_offset(e: u8, digits: &[u8]) -> u64 {
+    fn split(start: u64, len: u64, digits: &[u8]) -> u64 {
+        match digits.split_first() {
+            None => start,
+            Some((d, rest)) => {
+                let part = len / 8;
+                split(start + u64::from(*d) * part, part, rest)
+            }
+        }
+    }
+    split(0, 1u64 << (3 * u32::from(e)), digits)
+}
+
+/// Morton point of a bit offset in a cube of side `2^e`, by de-interleaving
+/// the offset bit by bit: bit `3k` → x, `3k + 1` → y, `3k + 2` → z.
+pub fn morton_point(offset: u64, e: u8) -> (u32, u32, u32) {
+    let (mut x, mut y, mut z) = (0u32, 0u32, 0u32);
+    for k in 0..u32::from(e) {
+        x |= (((offset >> (3 * k)) & 1) as u32) << k;
+        y |= (((offset >> (3 * k + 1)) & 1) as u32) << k;
+        z |= (((offset >> (3 * k + 2)) & 1) as u32) << k;
+    }
+    (x, y, z)
+}
+
 /// Hash of a state: FNV-1a over the little-endian bytes of every word.
 ///
 /// For checking that two runs reached the same state; not cryptographic.

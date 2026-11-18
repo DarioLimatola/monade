@@ -10,11 +10,13 @@
 //! - [`origin`]: point 0, an append-only log of foundations (empty for now).
 //! - [`specs`]: the specifications, mutable with history, one locked entry (the seed).
 //! - [`size`]: the sizes of the Monade (64 bits to 2 MB in powers of 8) and arenas.
+//! - [`address`]: the octal address (a root and a path of base-8 digits), down to one bit.
 //!
 //! No floating point, no `unsafe`, no external dependencies. Errors are values.
 
 #![forbid(unsafe_code)]
 
+pub mod address;
 pub mod origin;
 pub mod record;
 pub mod size;
