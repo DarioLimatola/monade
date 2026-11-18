@@ -9,6 +9,7 @@
 mod check;
 mod report;
 mod runs;
+mod stars;
 mod store;
 
 use monade_core::origin::{Draft, State};
@@ -26,12 +27,15 @@ USAGE
   monade-run show
   monade-run check  [--runs R]
   monade-run report [--runs R] [--out F]
+  monade-run stars  --catalog C [--out F]
   monade-run append-foundation --name N --text T --motive M [--state active|suspended] [--amends ID]
   monade-run set-spec KEY VALUE --motive M
 
   show     point 0 and the specifications
   check    verifies the Monade, says what it verified, saves the run in R
   report   writes one HTML page (F) from every run in R; open it in a browser
+  stars    puts the stars of a catalog (HYG CSV) into four 2 MB Monadi and writes
+           a 3D map (F, default stars.html)
 
 OPTIONS
   --dir D    folder of origin.txt and specs.txt (default: foundations)
@@ -197,6 +201,10 @@ fn run(args: &[String], now: &str) -> Result<String, CliError> {
             a.only(&["runs", "out"], 0)?;
             report_command(&a, now)
         }
+        "stars" => {
+            a.only(&["catalog", "out"], 0)?;
+            stars_command(&a)
+        }
         "help" | "--help" | "-h" => Ok(USAGE.to_string()),
         other => Err(CliError::Usage(format!("unknown command `{other}`"))),
     }
@@ -359,6 +367,27 @@ fn report_command(a: &Args, now: &str) -> Result<String, CliError> {
     Ok(format!(
         "report of {} runs written to {}\nopen it in a browser (double click)\n",
         all.len(),
+        out.display()
+    ))
+}
+
+fn stars_command(a: &Args) -> Result<String, CliError> {
+    let catalog = PathBuf::from(a.required("catalog")?);
+    let list = stars::read_catalog(&catalog).map_err(|e| CliError::Usage(e.to_string()))?;
+    let scales = stars::build(&list);
+    let source = catalog
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let page = stars::html(
+        &list,
+        &scales,
+        &format!("{source} (HYG Database, astronexus.com, CC BY-SA 4.0)"),
+    );
+    let out = PathBuf::from(a.flag("out").unwrap_or("stars.html"));
+    std::fs::write(&out, page).map_err(|e| CliError::Store(StoreError::Io(out.clone(), e)))?;
+    Ok(format!(
+        "{}\nmap written to {}\nopen it in a browser (double click)\n",
+        stars::summary(&list, &scales),
         out.display()
     ))
 }
