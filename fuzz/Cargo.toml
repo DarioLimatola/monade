@@ -1,0 +1,25 @@
+# Fuzzing of the log readers. Optional: needs Linux, nightly and cargo-fuzz.
+#   cargo install cargo-fuzz
+#   cargo +nightly fuzz run read_logs      (from the repository root)
+[package]
+name = "monade-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+monade-core = { path = "../crates/monade-core" }
+
+[[bin]]
+name = "read_logs"
+path = "fuzz_targets/read_logs.rs"
+test = false
+doc = false
+bench = false
+
+# Not part of the main workspace.
+[workspace]

@@ -1,0 +1,20 @@
+[package]
+name = "monade-core"
+description = "The core of the Monade: words, point 0, specifications, sizes. No dependencies, no floating point."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Exposes the slow reference implementations (the oracle) outside unit tests,
+# for the fuzz targets and for other crates' tests. Never used by the engine.
+oracle = []
+
+[dependencies]
+
+[dev-dependencies]
+proptest = "1.12"
+
+[lints]
+workspace = true

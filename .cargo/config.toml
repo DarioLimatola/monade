@@ -1,0 +1,4 @@
+# `cargo all` runs every check of the Monade: fmt, clippy, the no-float rule,
+# tests in debug and in release. The same command runs locally and in CI.
+[alias]
+all = "run --quiet -p xtask --"
