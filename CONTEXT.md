@@ -36,7 +36,7 @@ Italian, brief and essential; instructions for Windows.
 2. No `unsafe` (forbidden by lint). No floating point in `monade-core`: no
    floating-point type even in comments (checked by `cargo all`).
 3. Reuse well-maintained open-source libraries where possible and efficient (a
-   criterion of good programming). `monade-core` keeps few, vetted ones (next: the
+   criterion of good programming). `monade-core` keeps few, vetted ones (today only the
    official `blake3`). `monade-run` uses `serde` and `serde_json`.
 4. Errors are values; library code never panics on bad input.
 5. Every public item has documentation and a runnable example.
@@ -57,6 +57,7 @@ crates/
     src/origin.rs     point 0: append-only log of foundations, EMPTY for now
     src/specs.rs      specifications: versioned history, locked seed
     src/size.rs       sizes 64 bits → 2 MB (powers of 8), arenas, Ref::ORIGIN
+    src/space.rs      generated space (GEN): vectors from id/name + seed, BLAKE3 v1
     src/address.rs    octal address: root + base-8 path (down, up, offset, Morton
                       point, packed 56 bits), Arena::part
     src/oracle.rs     slow references + state_hash() (tests / feature `oracle`)
@@ -91,6 +92,11 @@ prereg/ ladder/ properties/ worlds/ benches/   empty for now
 - **Sizes:** level 0 word (64 b), 1 block (512 b), 2 symbol (4096 b), 3, 4, 5,
   6 thought (2 MB). Defined recursively (one size = 8 of the one below); any other
   length is `Err`, never a panic.
+- **Generated space, hash version 1 (locked):** key = BLAKE3 `derive_key("monade space
+  v1", seed as 8 bytes LE)`; vector of an id = BLAKE3 keyed output of `[0] + id (8
+  bytes LE)`, of a name = output of `[1] + UTF-8 name`; read as little-endian words;
+  block k = output bytes 64k..64k+64 (random access); smaller sizes are prefixes.
+  Golden fingerprints in `space.rs` tests: if they change, it is another mind.
 - **Octal address, packed 56 bits:** `Address` = root (< 2²⁸, which arena) + up to 8
   base-8 digits (digit 0 = topmost split). A Monade of `8^e` bits (`e = level + 2`)
   is a cube of side `2^e`; each digit is an octant (bit 0 → x, 1 → y, 2 → z), so the
@@ -111,8 +117,8 @@ prereg/ ladder/ properties/ worlds/ benches/   empty for now
 3. ✅ Sizes, arenas, fast = slow.
 3b. ✅ `monade-run check` (readable results) + run folders + `monade-run report` (HTML).
 3c. ✅ Octal address (`address.rs`), with its check.
-4. Space: generated vectors from seed + address (Logos `GEN`); hash version 1 =
-   BLAKE3 (official crate), keyed from the seed, context "monade space v1".
+4. ✅ Space: generated vectors from seed + id (Logos `GEN`); hash version 1 = BLAKE3
+   (official crate), keyed from the seed, context "monade space v1".
 5. Counters per bit: add, read by majority, certainty, residue (test 19).
 6. Blackboard: Monade of 8^4 bits, voices bound to keys, consensus, residue (test 19).
 7. Ternary unit with homeostasis; rungs 0–4.
@@ -160,3 +166,6 @@ cargo run -p monade-run -- set-spec KEY VALUE --motive M
   entering only by the sign bridge). Next: step 4 (generated space, BLAKE3).
 - **2026-11-18 · v0.3.1.** Detailed report (why, how, numbers, histograms, glossary).
   v0.3.0 confirmed on Windows: 10/10, golden hashes unchanged.
+- **2026-11-18 · v0.4.0.** Step 4: the generated space (BLAKE3 v1) and two checks,
+  `space.generated` and `space.sentence` ("the dog sleeps" answered role by role,
+  6/6, margin ≥ 105 bits). Next: step 5, counters per bit (the first learning).

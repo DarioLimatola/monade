@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.0 — 2026-11-18
+
+- Step 4, the generated space (`monade_core::space`, Logos `GEN`): basic vectors
+  computed from an id or a name and the seed, never stored. Hash version 1: BLAKE3
+  keyed with a key derived from the seed (context "monade space v1"); input = domain
+  byte (0 id, 1 name) + payload; extendable output read in 64-byte blocks, so any
+  512-bit block is computed alone and a smaller size is the beginning of a larger one.
+  `Space::from_specs`, `generate`, `named`, `block`, `part` (by octal address).
+- Golden fingerprints of the genesis space fixed in the tests: changing them is a new mind.
+- Slow reference `oracle::generate` (byte by byte from the start).
+- Dependency: `blake3` (feature `pure`: Rust only), optimised even in debug builds.
+- `monade-run check`: `space.generated` (fingerprint, distance of generated pairs,
+  random access, speed) and `space.sentence` ("the dog sleeps" in one block, asked
+  role by role). 12 checks.
+
 ## 0.3.1 — 2026-11-18
 
 - Report in full detail: what the Monade is today; for every check its claim, why it

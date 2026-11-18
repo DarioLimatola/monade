@@ -483,7 +483,7 @@ mod tests {
         let mut a = args(&["check", "--runs"], &d);
         a.insert(2, r.display().to_string());
         let out = run(&a, "2026-11-18T18:10:05Z").unwrap();
-        assert!(out.contains("10 of 10 passed"), "{out}");
+        assert!(out.contains("12 of 12 passed"), "{out}");
         assert!(out.contains("word.xor.laws"));
         assert!(r.join("20261118-181005").join("results.jsonl").is_file());
         let rep = run(
@@ -499,7 +499,7 @@ mod tests {
         .unwrap();
         assert!(rep.contains("report of 1 runs"));
         let page = std::fs::read_to_string(&html).unwrap();
-        assert!(page.contains("all 10 checks passed"));
+        assert!(page.contains("all 12 checks passed"));
         let _ = std::fs::remove_dir_all(&r);
         let _ = std::fs::remove_file(&html);
     }

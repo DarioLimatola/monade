@@ -11,8 +11,9 @@
 //! - [`specs`]: the specifications, mutable with history, one locked entry (the seed).
 //! - [`size`]: the sizes of the Monade (64 bits to 2 MB in powers of 8) and arenas.
 //! - [`address`]: the octal address (a root and a path of base-8 digits), down to one bit.
+//! - [`space`]: the generated space: vectors computed from an id and the seed (BLAKE3).
 //!
-//! No floating point, no `unsafe`, no external dependencies. Errors are values.
+//! No floating point, no `unsafe`; one dependency, `blake3`, for the generated space. Errors are values.
 
 #![forbid(unsafe_code)]
 
@@ -20,6 +21,7 @@ pub mod address;
 pub mod origin;
 pub mod record;
 pub mod size;
+pub mod space;
 pub mod specs;
 pub mod word;
 
