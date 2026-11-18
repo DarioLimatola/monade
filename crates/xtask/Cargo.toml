@@ -3,7 +3,6 @@ name = "xtask"
 description = "Runs every check of the Monade (`cargo all`), the same on Windows, Linux and CI."
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 publish.workspace = true
 
 [dependencies]

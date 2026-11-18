@@ -3,3 +3,5 @@
 /fuzz/corpus
 /fuzz/artifacts
 /foundations
+
+/report.html

@@ -3,11 +3,14 @@ name = "monade-run"
 description = "The command line of the Monade: the only writer of point 0 and of the specifications."
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 publish.workspace = true
 
 [dependencies]
-monade-core = { path = "../monade-core" }
+# The oracle (slow references) is compiled in so that `check` can compare
+# fast and slow at run time; the engine itself never uses it.
+monade-core = { path = "../monade-core", features = ["oracle"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [lints]
 workspace = true

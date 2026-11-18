@@ -1,6 +1,6 @@
 //! Point 0 as object: an append-only log of foundations. Empty for now.
 //!
-//! The mechanism exists; the content is decided last, by the Demiurge.
+//! The mechanism exists; the content is decided last, by the author.
 //! There is no function to delete or modify an entry: a change is a new
 //! entry that amends an old one. Identifiers are never reused. The engine
 //! receives the log as `&Origin`, read only; only `monade-run` appends.
@@ -59,7 +59,7 @@ impl State {
     }
 }
 
-/// What the Demiurge writes to add a foundation; the log assigns id and version.
+/// What the author writes to add a foundation; the log assigns id and version.
 ///
 /// # Example
 ///

@@ -1,10 +1,14 @@
 //! `monade-run`: the command line of the Monade.
 //!
-//! The only writer of point 0 and of the specifications. Errors are values:
-//! every command returns its text or an error, and `main` prints it.
+//! The only writer of point 0 and of the specifications; it also verifies the
+//! Monade (`check`) and shows the results (`report`). Errors are values: every
+//! command returns its text or an error, and `main` prints it.
 
 #![forbid(unsafe_code)]
 
+mod check;
+mod report;
+mod runs;
 mod store;
 
 use monade_core::origin::{Draft, State};
@@ -20,11 +24,19 @@ monade-run — the only writer of point 0 and of the specifications
 
 USAGE
   monade-run show
+  monade-run check  [--runs R]
+  monade-run report [--runs R] [--out F]
   monade-run append-foundation --name N --text T --motive M [--state active|suspended] [--amends ID]
   monade-run set-spec KEY VALUE --motive M
 
+  show     point 0 and the specifications
+  check    verifies the Monade, says what it verified, saves the run in R
+  report   writes one HTML page (F) from every run in R; open it in a browser
+
 OPTIONS
   --dir D    folder of origin.txt and specs.txt (default: foundations)
+  --runs R   folder of the runs (default: runs)
+  --out F    the HTML page (default: report.html)
 ";
 
 /// Errors of the command line.
@@ -34,6 +46,10 @@ enum CliError {
     Usage(String),
     /// The files refused the change.
     Store(StoreError),
+    /// A run folder cannot be read or written.
+    Runs(runs::RunError),
+    /// Some checks failed; the text is the full output.
+    ChecksFailed(String),
 }
 
 impl std::fmt::Display for CliError {
@@ -41,6 +57,8 @@ impl std::fmt::Display for CliError {
         match self {
             CliError::Usage(m) => write!(f, "{m}\n\n{USAGE}"),
             CliError::Store(e) => write!(f, "{e}"),
+            CliError::Runs(e) => write!(f, "runs: {e}"),
+            CliError::ChecksFailed(out) => write!(f, "some checks failed\n\n{out}"),
         }
     }
 }
@@ -48,6 +66,12 @@ impl std::fmt::Display for CliError {
 impl From<StoreError> for CliError {
     fn from(e: StoreError) -> Self {
         CliError::Store(e)
+    }
+}
+
+impl From<runs::RunError> for CliError {
+    fn from(e: runs::RunError) -> Self {
+        CliError::Runs(e)
     }
 }
 
@@ -65,7 +89,7 @@ impl From<monade_core::specs::SpecError> for CliError {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match run(&args, &today()) {
+    match run(&args, &now()) {
         Ok(out) => {
             print!("{out}");
             ExitCode::SUCCESS
@@ -139,10 +163,15 @@ impl Args {
     fn dir(&self) -> PathBuf {
         PathBuf::from(self.flag("dir").unwrap_or("foundations"))
     }
+
+    fn runs(&self) -> PathBuf {
+        PathBuf::from(self.flag("runs").unwrap_or(runs::RUNS_DIR))
+    }
 }
 
-/// Runs one command; `today` is the date written in new entries.
-fn run(args: &[String], today: &str) -> Result<String, CliError> {
+/// Runs one command; `now` is the UTC time, `YYYY-MM-DDTHH:MM:SSZ`.
+fn run(args: &[String], now: &str) -> Result<String, CliError> {
+    let today = &now[..10.min(now.len())];
     let Some((command, rest)) = args.split_first() else {
         return Ok(USAGE.to_string());
     };
@@ -159,6 +188,14 @@ fn run(args: &[String], today: &str) -> Result<String, CliError> {
         "set-spec" => {
             a.only(&["motive"], 2)?;
             set_spec(&a, today)
+        }
+        "check" => {
+            a.only(&["runs"], 0)?;
+            check_command(&a, now)
+        }
+        "report" => {
+            a.only(&["runs", "out"], 0)?;
+            report_command(&a, now)
         }
         "help" | "--help" | "-h" => Ok(USAGE.to_string()),
         other => Err(CliError::Usage(format!("unknown command `{other}`"))),
@@ -254,13 +291,91 @@ fn set_spec(a: &Args, today: &str) -> Result<String, CliError> {
     Ok(format!("specifications: {key} = {value} (v{version})\n"))
 }
 
-/// Today's date (UTC), `YYYY-MM-DD`.
-fn today() -> String {
+fn check_command(a: &Args, now: &str) -> Result<String, CliError> {
+    let outcomes = check::all(&a.dir());
+    let (os, arch, cpu, threads) = runs::machine();
+    let passed = outcomes.iter().filter(|o| o.passed).count() as u64;
+    let failed = outcomes.len() as u64 - passed;
+    let micros = outcomes.iter().map(|o| o.micros).sum();
+    let name: String = now
+        .chars()
+        .filter(char::is_ascii_digit)
+        .enumerate()
+        .flat_map(|(i, c)| if i == 8 { vec!['-', c] } else { vec![c] })
+        .collect();
+    let mut meta = runs::Meta {
+        name,
+        version: env!("CARGO_PKG_VERSION").into(),
+        started: now.into(),
+        os,
+        arch,
+        cpu,
+        threads,
+        passed,
+        failed,
+        micros,
+    };
+    let dir = runs::save(&a.runs(), &mut meta, &outcomes)?;
+    let mut out = format!(
+        "MONADE CHECK  v{}  {}  {} {}  {}  {} threads\n\n",
+        meta.version,
+        now.replace('T', " ").replace('Z', " UTC"),
+        meta.os,
+        meta.arch,
+        meta.cpu.join(" "),
+        meta.threads
+    );
+    for o in &outcomes {
+        let _ = writeln!(
+            out,
+            "{}  {:<24} {}",
+            if o.passed { "ok  " } else { "FAIL" },
+            o.id,
+            o.result
+        );
+        if !o.passed {
+            let _ = writeln!(out, "      {:<24} expected: {}", "", o.expected);
+        }
+    }
+    let _ = writeln!(
+        out,
+        "\n{passed} of {} passed in {} ms · saved in {}\nsee the report: cargo run -p monade-run -- report",
+        outcomes.len(),
+        micros / 1000,
+        dir.display()
+    );
+    if failed == 0 {
+        Ok(out)
+    } else {
+        Err(CliError::ChecksFailed(out))
+    }
+}
+
+fn report_command(a: &Args, now: &str) -> Result<String, CliError> {
+    let all = runs::load_all(&a.runs())?;
+    let page = report::html(&all, &now.replace('T', " ").replace('Z', " UTC"));
+    let out = PathBuf::from(a.flag("out").unwrap_or("report.html"));
+    std::fs::write(&out, page).map_err(|e| CliError::Store(StoreError::Io(out.clone(), e)))?;
+    Ok(format!(
+        "report of {} runs written to {}\nopen it in a browser (double click)\n",
+        all.len(),
+        out.display()
+    ))
+}
+
+/// The current time (UTC), `YYYY-MM-DDTHH:MM:SSZ`.
+fn now() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     let (y, m, d) = civil_from_days((secs / 86_400) as i64);
-    format!("{y:04}-{m:02}-{d:02}")
+    let t = secs % 86_400;
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        t / 3600,
+        (t / 60) % 60,
+        t % 60
+    )
 }
 
 /// Year, month, day of a count of days since 1970-01-01 (H. Hinnant's algorithm).
@@ -299,7 +414,8 @@ mod tests {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(11_017), (2000, 3, 1));
         assert_eq!(civil_from_days(20_775), (2026, 11, 18));
-        assert!(monade_core::record::is_date(&today()));
+        assert!(monade_core::record::is_date(&now()[..10]));
+        assert_eq!(now().len(), 20);
     }
 
     #[test]
@@ -357,6 +473,35 @@ mod tests {
         std::fs::write(&p, format!("{text}# a note added by hand\n")).unwrap();
         assert!(run(&args(&["show"], &d), day).is_err());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn check_then_report() {
+        let d = temp("check");
+        let r = temp("check-runs");
+        let html = temp("check-report.html");
+        let mut a = args(&["check", "--runs"], &d);
+        a.insert(2, r.display().to_string());
+        let out = run(&a, "2026-11-18T18:10:05Z").unwrap();
+        assert!(out.contains("9 of 9 passed"), "{out}");
+        assert!(out.contains("word.xor.laws"));
+        assert!(r.join("20261118-181005").join("results.jsonl").is_file());
+        let rep = run(
+            &[
+                "report".into(),
+                "--runs".into(),
+                r.display().to_string(),
+                "--out".into(),
+                html.display().to_string(),
+            ],
+            "2026-11-18T18:11:00Z",
+        )
+        .unwrap();
+        assert!(rep.contains("report of 1 runs"));
+        let page = std::fs::read_to_string(&html).unwrap();
+        assert!(page.contains("all 9 checks passed"));
+        let _ = std::fs::remove_dir_all(&r);
+        let _ = std::fs::remove_file(&html);
     }
 
     #[test]
