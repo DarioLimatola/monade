@@ -67,6 +67,7 @@ crates/
     src/check.rs      `check`: 9 checks that say in words and numbers what they verified
     src/runs.rs       run folders: runs/YYYYMMDD-HHMMSS/{run.json, results.jsonl}
     src/report.rs     `report`: one self-contained HTML page (history + latest run)
+    src/stars.rs      first world: stars of a catalog in four 2 MB Monadi + 3D map
   xtask/              `cargo all`: every check
 fuzz/                 cargo-fuzz target for the log readers (Linux, nightly)
 runs/                 results of `check` (one folder per run, never overwritten)
@@ -145,6 +146,7 @@ cargo all                                    every check, as CI
 cargo run -p monade-run -- show              point 0 and specifications
 cargo run -p monade-run -- check             verify; results saved in runs/
 cargo run -p monade-run -- report            report.html from every run
+cargo run --release -p monade-run -- stars --catalog hygdata_v41.csv   stars.html
 cargo run -p monade-run -- append-foundation --name N --text T --motive M
 cargo run -p monade-run -- set-spec KEY VALUE --motive M
 ```
@@ -174,3 +176,6 @@ cargo run -p monade-run -- set-spec KEY VALUE --motive M
 - **2026-11-18 · v0.4.1.** Rust pinned to 1.97.0 (`rust-toolchain.toml`), after a new
   clippy rule of Rust 1.100 failed on one machine only. v0.4.0 confirmed on Windows:
   12/12, generated-space fingerprint identical to Linux.
+- **2026-11-18 · v0.4.2.** First world: the stars (HYG catalog, 119 626 stars) in four
+  2 MB Monadi (cubes of 32, 128, 512, 2048 pc; cells of 0.125 to 8 pc), with layers,
+  and a 3D map read back from the Monadi. No learning; uses the octal address only.

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.2 — 2026-11-18
+
+- First world, the stars: `monade-run stars --catalog FILE` reads an HYG-like CSV
+  (positions read as thousandths of a parsec, no floating point) and puts the stars
+  into four 2 MB Monadi, cubes of 256³ cells around the Sun (half-widths 16, 64, 256,
+  1024 pc), one bit per cell, the cell found by its octal address. Six more layers
+  per scale with the same addresses (naked eye; five colour classes).
+- `stars.html`: a self-contained 3D map (rotate, zoom, scale, naked-eye filter,
+  names of the brightest stars). The points are read back from the Monadi.
+- Measures: stars inside, cells lit, stars sharing a cell, mean and largest distance
+  to the cell centre, lit cells per octant.
+
 ## 0.4.1 — 2026-11-18
 
 - Rust version pinned: `rust-toolchain.toml` (1.97.0, with clippy and rustfmt); CI uses it.
