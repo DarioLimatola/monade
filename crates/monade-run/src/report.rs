@@ -61,19 +61,21 @@ details summary{cursor:pointer;color:var(--mute)}
 .intro{max-width:820px}
 svg text{fill:var(--mute);font:11px system-ui,'Segoe UI',sans-serif}
 svg .axis{stroke:var(--line)}
+svg text.v{font-size:8px}
 dl{max-width:820px} dt{font-weight:600;margin-top:8px} dd{margin:0 0 0 16px;color:var(--mute)}
 ";
 
 /// What the Monade is today, in plain words (updated with each step).
-const TODAY: &str = "Today the Monade is an algebra and a memory container: \
-vectors of bits from 64 bits to 2 MB, the operations that bind (XOR), compare \
-(Hamming distance) and superpose (majority) them, arenas that store them, an octal \
+const TODAY: &str = "Today the Monade is an algebra, a memory container and \
+its first learning: vectors of bits from 64 bits to 2 MB, the operations that bind (XOR), \
+compare (Hamming distance) and superpose (majority) them, arenas that store them, an octal \
 address that reaches any part down to one bit, the generated space (every basic \
 vector computed from an id and the seed, with BLAKE3), and the foundations (point 0, \
-still empty, and the specifications with the locked seed). It can already compose: \
-a sentence held in one block and taken apart by asking its roles. It does not learn yet: \
-learning starts with the counters (step 5), the ternary unit (step 7) and the \
-learning cycle (step 10). These checks prove that the ground it will stand on is exact.";
+still empty, and the specifications with the locked seed). It can compose: a sentence \
+held in one block and taken apart by asking its roles. And it learns, in the simplest \
+way: counters per bit (the tally) reinforce what repeats and cancel noise, say how sure \
+each bit is, and keep the residue of the voices the majority outvoted. Learning goes on \
+with the blackboard (step 6), the ternary unit (step 7) and the learning cycle (step 10).";
 
 /// Short definitions of the words used in the checks.
 const GLOSSARY: &[(&str, &str)] = &[
@@ -88,12 +90,111 @@ const GLOSSARY: &[(&str, &str)] = &[
     ("Octal address, Morton order", "A path of base-8 digits; each digit is an octant of a cube, so the path is also a point in space."),
     ("Seed", "The number from which the whole generated space is computed; locked: a new seed is a new mind."),
     ("Point 0", "The origin: the empty coordinate and the log of foundations, written only by the author."),
+    ("Tally (counters per bit)", "One signed counter per bit: a vote adds 1 where the bit is 1 and takes 1 where it is 0. The bit is the reading (the sign of its counter), the counter is the memory."),
+    ("Certainty", "The absolute value of a counter: how many more votes went one way than the other. 0 is a tie."),
+    ("Residue", "Voice XOR reading: the bits of a voice the majority discarded. The base form of Mutation; how the minority is heard."),
+    ("Uncertain mask", "The bits whose counters are near 0: where the voices disagree."),
+    ("Control", "A run built so that the claim must fail (random voices, too small a size); if it passed, the check would prove nothing."),
 ];
+
+/// Okabe-Ito colours for the series, in order.
+const COLOURS: [&str; 3] = ["#0072B2", "#E69F00", "#009E73"];
+
+/// The legend: one coloured square and name per series, under the chart.
+fn legend(svg: &mut String, h: &Histogram, y: u64) {
+    let mut x = 0;
+    for (si, s) in h.series.iter().enumerate() {
+        let colour = COLOURS[si % COLOURS.len()];
+        let _ = write!(
+            svg,
+            "<rect x=\"{x}\" y=\"{}\" width=\"10\" height=\"10\" fill=\"{colour}\"/><text x=\"{}\" y=\"{}\">{}</text>",
+            y,
+            x + 14,
+            y + 9,
+            esc(&s.name)
+        );
+        x += 14 + 8 * s.name.len() as u64;
+    }
+}
+
+/// A chart of categories as an inline SVG: one group of bars per label, the
+/// series side by side, every value printed above its bar.
+fn chart_by_label(h: &Histogram) -> String {
+    const W: u64 = 640;
+    const H: u64 = 120;
+    let bins = h.labels.len() as u64;
+    let n = h.series.len().max(1) as u64;
+    let top = h
+        .series
+        .iter()
+        .flat_map(|s| s.counts.iter().copied())
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    if bins == 0 {
+        return String::new();
+    }
+    let gw = W / bins;
+    let bw = (gw.saturating_sub(6) / n).max(1);
+    let base = H + 14;
+    let mut svg = format!(
+        "<div class=\"meta\">{}</div><svg width=\"{}\" height=\"{}\" role=\"img\" aria-label=\"{}\">",
+        esc(&h.title),
+        W + 8,
+        base + 56,
+        esc(&h.title)
+    );
+    for (si, s) in h.series.iter().enumerate() {
+        let colour = COLOURS[si % COLOURS.len()];
+        for (i, c) in s.counts.iter().enumerate().take(bins as usize) {
+            let bh = (c * H / top).max(u64::from(*c > 0));
+            let x = i as u64 * gw + si as u64 * bw;
+            let label = h.labels.get(i).map_or("", String::as_str);
+            let _ = write!(
+                svg,
+                "<rect x=\"{x}\" y=\"{}\" width=\"{}\" height=\"{bh}\" fill=\"{colour}\" fill-opacity=\"0.85\"><title>{} · {}: {c}</title></rect>\
+                 <text class=\"v\" x=\"{}\" y=\"{}\" text-anchor=\"middle\">{c}</text>",
+                base - bh,
+                bw.saturating_sub(1).max(1),
+                esc(&s.name),
+                esc(label),
+                x + bw / 2,
+                base - bh - 2
+            );
+        }
+    }
+    let _ = write!(
+        svg,
+        "<line class=\"axis\" x1=\"0\" y1=\"{base}\" x2=\"{W}\" y2=\"{base}\"/>"
+    );
+    for (i, label) in h.labels.iter().enumerate() {
+        let _ = write!(
+            svg,
+            "<text x=\"{}\" y=\"{}\" text-anchor=\"middle\">{}</text>",
+            i as u64 * gw + n * bw / 2,
+            base + 14,
+            esc(label)
+        );
+    }
+    let _ = write!(
+        svg,
+        "<text x=\"{}\" y=\"{}\" text-anchor=\"middle\">{}</text>",
+        W / 2,
+        base + 30,
+        esc(&h.unit)
+    );
+    legend(&mut svg, h, base + 40);
+    svg.push_str("</svg>");
+    svg
+}
 
 /// A histogram as an inline SVG: bars per bin, one colour per series.
 fn chart(h: &Histogram) -> String {
     const W: u64 = 640;
     const H: u64 = 120;
+    if !h.labels.is_empty() {
+        return chart_by_label(h);
+    }
     let bins = h.series.iter().map(|s| s.counts.len()).max().unwrap_or(0) as u64;
     let top = h
         .series
@@ -106,7 +207,7 @@ fn chart(h: &Histogram) -> String {
         return String::new();
     }
     let bw = W / bins;
-    let colours = ["#0072B2", "#E69F00"];
+    let colours = COLOURS;
     let mut svg = format!(
         "<div class=\"meta\">{}</div><svg width=\"{}\" height=\"{}\" role=\"img\" aria-label=\"{}\">",
         esc(&h.title),
@@ -150,19 +251,7 @@ fn chart(h: &Histogram) -> String {
         H + 32,
         esc(&h.unit)
     );
-    let mut x = 0;
-    for (si, s) in h.series.iter().enumerate() {
-        let colour = colours[si % colours.len()];
-        let _ = write!(
-            svg,
-            "<rect x=\"{x}\" y=\"{}\" width=\"10\" height=\"10\" fill=\"{colour}\"/><text x=\"{}\" y=\"{}\">{}</text>",
-            H + 22,
-            x + 14,
-            H + 31,
-            esc(&s.name)
-        );
-        x += 14 + 8 * s.name.len() as u64;
-    }
+    legend(&mut svg, h, H + 22);
     svg.push_str("</svg>");
     svg
 }
@@ -373,9 +462,36 @@ mod tests {
                         name: "s".into(),
                         counts: vec![1, 0, 3],
                     }],
+                    labels: Vec::new(),
                 }],
             }],
         }
+    }
+
+    #[test]
+    fn chart_of_categories_prints_labels_and_values() {
+        let h = Histogram {
+            title: "t".into(),
+            unit: "u".into(),
+            start: 0,
+            width: 1,
+            series: vec![
+                Series {
+                    name: "a".into(),
+                    counts: vec![154, 7],
+                },
+                Series {
+                    name: "b".into(),
+                    counts: vec![256, 255],
+                },
+            ],
+            labels: vec!["N=1".into(), "N=64".into()],
+        };
+        let svg = chart(&h);
+        assert!(svg.contains(">N=64<"));
+        assert!(svg.contains(">154<"));
+        assert!(svg.contains("#E69F00"));
+        assert_eq!(svg.matches("<rect").count(), 4 + 2);
     }
 
     #[test]

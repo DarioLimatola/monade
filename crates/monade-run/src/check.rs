@@ -8,6 +8,7 @@ use monade_core::oracle;
 use monade_core::size::{Arena, Size};
 use monade_core::space::Space;
 use monade_core::specs::{Specs, SEED_KEY};
+use monade_core::tally::Tally;
 use monade_core::word::{self, Word};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -46,6 +47,10 @@ pub struct Histogram {
     pub width: u64,
     /// One series per kind of value.
     pub series: Vec<Series>,
+    /// Names of the bins, when they are categories (e.g. N = 1, 2, 4 ...) rather
+    /// than equal ranges of values; then the series are drawn side by side.
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 
 /// One series of a histogram.
@@ -123,12 +128,38 @@ impl Inputs {
     fn monade(&mut self, size: Size) -> Vec<Word> {
         (0..size.words()).map(|_| self.word()).collect()
     }
+
+    /// A noise mask: each bit set with probability `per256 / 256` (one random
+    /// byte per bit, compared with `per256`).
+    fn noise(&mut self, size: Size, per256: u64) -> Vec<Word> {
+        (0..size.words())
+            .map(|_| {
+                let mut w = 0u64;
+                for chunk in 0..8 {
+                    let r = self.next();
+                    for i in 0..8 {
+                        if (r >> (8 * i)) & 0xff < per256 {
+                            w |= 1 << (8 * chunk + i);
+                        }
+                    }
+                }
+                Word::new(w)
+            })
+            .collect()
+    }
+
+    /// `v` with each bit flipped with probability `per256 / 256`.
+    fn noisy(&mut self, v: &[Word], per256: u64) -> Vec<Word> {
+        let size = Size::from_bits(64 * v.len() as u64).unwrap_or(Size::WORD);
+        let mask = self.noise(size, per256);
+        v.iter().zip(mask).map(|(a, m)| a.xor(m)).collect()
+    }
 }
 
 /// Runs every check, in order, on the foundations in `dir`.
 pub fn all(dir: &Path) -> Vec<Outcome> {
     let mut inputs = Inputs::new();
-    let checks: [fn(&mut Inputs, &Path) -> Draft; 12] = [
+    let checks: [fn(&mut Inputs, &Path) -> Draft; 15] = [
         determinism,
         xor_laws,
         fast_equals_slow,
@@ -140,6 +171,9 @@ pub fn all(dir: &Path) -> Vec<Outcome> {
         octal_address,
         generated_space,
         sentence,
+        reinforcement,
+        capacity,
+        residue,
         foundations,
     ];
     checks
@@ -402,6 +436,7 @@ fn random_distance(inputs: &mut Inputs, _: &Path) -> Draft {
                 name: "random pairs".into(),
                 counts: histogram(&values, start, width, 40),
             }],
+            labels: Vec::new(),
         });
         parts.push(format!(
             "{bits} bits: mean {} (expected {}), closest {min}, farthest {max}",
@@ -475,6 +510,7 @@ fn bundle_recall(inputs: &mut Inputs, _: &Path) -> Draft {
                     counts: histogram(&decoy_values, 96, 4, 52),
                 },
             ],
+            labels: Vec::new(),
         });
         let per_mille = found * 1000 / tried.max(1);
         d.passed &= per_mille >= threshold_per_mille;
@@ -774,6 +810,7 @@ fn generated_space(inputs: &mut Inputs, dir: &Path) -> Draft {
             name: "generated pairs".into(),
             counts: histogram(&values, start, width, 40),
         }],
+        labels: Vec::new(),
     });
     let thoughts = 8u64;
     let mut same = 0u64;
@@ -886,6 +923,345 @@ fn sentence(_: &mut Inputs, dir: &Path) -> Draft {
     d
 }
 
+/// Noise of `memory.reinforcement`: each bit flipped with probability 77/256 (30.1%).
+const FLIP_30: u64 = 77;
+
+/// Pre-registered for `memory.reinforcement` (written before the first run, from
+/// the exact binomial; co-signed by the statistician): N noisy copies of a 512-bit
+/// pattern, each bit flipped with probability 77/256. For each N: the expected
+/// mean distance between the reading and the pattern, and the tolerance, both in
+/// tenths of a bit. A tie reads 0 and is wrong half the time, so N = 2 is no
+/// better than N = 1. Tolerance = 4 standard errors over 32 trials, at least 1 bit.
+const REINFORCEMENT: [(usize, u64, u64); 7] = [
+    (1, 1540, 73),
+    (2, 1540, 73),
+    (4, 1111, 66),
+    (8, 651, 53),
+    (16, 260, 35),
+    (32, 50, 16),
+    (64, 2, 10),
+];
+
+/// A tally of `votes` (all the same size).
+fn tally_of(size: Size, votes: &[Vec<Word>]) -> Tally {
+    let mut t = Tally::new(size);
+    for v in votes {
+        let _ = t.add(v);
+    }
+    t
+}
+
+fn reinforcement(inputs: &mut Inputs, _: &Path) -> Draft {
+    let mut d = Draft::new(
+        "memory.reinforcement",
+        "memory",
+        "What repeats is reinforced: a pattern seen N times, each time with 30% of its bits flipped at random, is recovered better as N grows; random voices with no pattern are never recovered.",
+    );
+    d.explain(
+        "This is the first learning of the Monade. Each bit has a counter: a vote adds 1 where the bit is 1 and takes 1 where it is 0. The bit is the reading, the counter is the memory. Noise points every way and cancels; the pattern always points the same way and grows. Nothing is stored but the counters, and no example is kept.",
+        "For each N (1, 2, 4 ... 64), in 32 trials, a random 512-bit pattern is shown N times, each copy with every bit flipped with probability 30%; the copies are counted in a tally and the reading (the sign of each counter) is compared with the pattern. The expected distances were computed beforehand from the binomial law and written in the code. Control: N random voices with no common pattern, read the same way, must stay as far from the pattern as a stranger (above half the bits minus 6 sigma).",
+    );
+    let trials = 32u64;
+    let floor = 256 - 3 * isqrt(512);
+    let (mut means, mut controls, mut labels, mut parts) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut previous: Option<(u64, u64)> = None;
+    for (n, expected, tolerance) in REINFORCEMENT {
+        let (mut sum, mut control_sum, mut control_min) = (0u64, 0u64, u64::MAX);
+        for _ in 0..trials {
+            let pattern = inputs.monade(Size::BLOCK);
+            let copies: Vec<Vec<Word>> = (0..n).map(|_| inputs.noisy(&pattern, FLIP_30)).collect();
+            let read = tally_of(Size::BLOCK, &copies).read();
+            sum += word::hamming(&read, &pattern).unwrap_or(512);
+            let strangers: Vec<Vec<Word>> = (0..n).map(|_| inputs.monade(Size::BLOCK)).collect();
+            let c = word::hamming(&tally_of(Size::BLOCK, &strangers).read(), &pattern).unwrap_or(0);
+            control_sum += c;
+            control_min = control_min.min(c);
+        }
+        let mean = sum * 10 / trials;
+        let within = mean.abs_diff(expected) <= tolerance;
+        // Never worse than half as many copies (within the tolerance).
+        let monotone = previous.is_none_or(|(m, tol)| mean <= m + tol.max(tolerance));
+        let control_ok = control_min > floor;
+        d.passed &= within && monotone && control_ok;
+        previous = Some((mean, tolerance));
+        means.push((mean + 5) / 10);
+        controls.push(control_sum / trials);
+        labels.push(format!("N={n}"));
+        parts.push(format!("N={n}: {}", tenths(mean)));
+        d.measure(
+            &format!("N = {n}: mean distance (expected)"),
+            format!(
+                "{} ({} ± {})",
+                tenths(mean),
+                tenths(expected),
+                tenths(tolerance)
+            ),
+        );
+        d.measure(
+            &format!("N = {n}: control, mean and closest"),
+            format!("{} and {control_min}", tenths(control_sum * 10 / trials)),
+        );
+    }
+    d.charts.push(Histogram {
+        title: "Distance between the reading and the pattern, by number of noisy copies (512 bits; lower is better)".into(),
+        unit: "bits of difference (mean of 32 trials)".into(),
+        start: 0,
+        width: 1,
+        series: vec![
+            Series {
+                name: "pattern seen N times".into(),
+                counts: means,
+            },
+            Series {
+                name: "control: N random voices".into(),
+                counts: controls,
+            },
+        ],
+        labels,
+    });
+    d.result = format!(
+        "512 bits, 30% noise, {} trials each; mean distance {}; control always above {floor}",
+        trials,
+        parts.join(", ")
+    );
+    d.expected = "each mean within its pre-registered tolerance (154 at N=1 and N=2, 111 at 4, 65 at 8, 26 at 16, 5 at 32, 0.2 at 64); never worse with more copies; control above half minus 6 sigma".into();
+    d
+}
+
+/// Numbers of voices of `memory.capacity`.
+const CAPACITY_VOICES: [usize; 10] = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32];
+
+fn capacity(inputs: &mut Inputs, _: &Path) -> Draft {
+    let mut d = Draft::new(
+        "memory.capacity",
+        "memory",
+        "A tally holds a limited number of voices, growing with its size: 8 voices in 512 bits stay recognisable (about 6 sigma above chance); in 64 bits they do not (about 2).",
+    );
+    d.explain(
+        "The blackboard of a meeting is one 512-bit block per level holding up to 8 voices. This check measures how many voices a tally can hold and still give each one back, at 64, 512 and 4096 bits: the capacity curve of test 19. It tells where the blackboard stands, and that 64 bits are too few.",
+        "For each size and each number of voices k, in 40 trials, k random voices are counted in a tally; each voice must be closer to the reading than all of 100 random decoys. Separation = (half the bits - mean distance of the voices) / (sigma of a decoy). Thresholds written before the first run, from the exact binomial: 512 bits with 8 voices at least 99% and 5 sigma (expected 100%, 6.2); 4096 bits with 32 voices at least 99% (expected 9 sigma). Control that must fail: 64 bits with 8 voices at most 60% and 3 sigma (expected about 35% and 2.2).",
+    );
+    let trials = 40u64;
+    let mut series = Vec::new();
+    let mut parts = Vec::new();
+    for size in [Size::WORD, Size::BLOCK, Size::SYMBOL] {
+        let bits = size.bits();
+        let root = isqrt(100 * bits);
+        let mut counts = Vec::new();
+        let mut line = Vec::new();
+        for k in CAPACITY_VOICES {
+            let (mut found, mut tried, mut sum) = (0u64, 0u64, 0u64);
+            for _ in 0..trials {
+                let voices: Vec<Vec<Word>> = (0..k).map(|_| inputs.monade(size)).collect();
+                let read = tally_of(size, &voices).read();
+                let nearest = (0..100)
+                    .map(|_| word::hamming(&read, &inputs.monade(size)).unwrap_or(0))
+                    .min()
+                    .unwrap_or(0);
+                for v in &voices {
+                    let h = word::hamming(&read, v).unwrap_or(bits);
+                    sum += h;
+                    tried += 1;
+                    found += u64::from(h < nearest);
+                }
+            }
+            let per_mille = found * 1000 / tried.max(1);
+            // Separation in tenths of sigma: 20 (n/2 - mean) / sqrt(n).
+            let sep = (bits * tried / 2).saturating_sub(sum) * 200 / (tried * root).max(1);
+            counts.push((per_mille + 5) / 10);
+            line.push(format!("{k}: {}% ({})", tenths(per_mille), tenths(sep)));
+            match (bits, k) {
+                (512, 8) => {
+                    d.passed &= per_mille >= 990 && sep >= 50;
+                    parts.insert(
+                        0,
+                        format!(
+                            "8 voices in 512 bits: {}% found, {} sigma",
+                            tenths(per_mille),
+                            tenths(sep)
+                        ),
+                    );
+                }
+                (4096, 32) => {
+                    d.passed &= per_mille >= 990;
+                    parts.push(format!(
+                        "32 voices in 4096 bits: {}% found, {} sigma",
+                        tenths(per_mille),
+                        tenths(sep)
+                    ));
+                }
+                (64, 8) => {
+                    d.passed &= per_mille <= 600 && sep <= 30;
+                    parts.push(format!(
+                        "control, 8 voices in 64 bits: {}% found, {} sigma (must fail)",
+                        tenths(per_mille),
+                        tenths(sep)
+                    ));
+                }
+                _ => {}
+            }
+        }
+        series.push(Series {
+            name: format!("{bits} bits"),
+            counts,
+        });
+        d.measure(
+            &format!("{bits} bits: voices: found (sigma)"),
+            line.join(", "),
+        );
+    }
+    // Speed of counting at 2 MB (a number for the electronic engineer; no threshold).
+    let thought = inputs.monade(Size::THOUGHT);
+    let mut t = Tally::new(Size::THOUGHT);
+    let start = Instant::now();
+    for _ in 0..4 {
+        let _ = t.add(&thought);
+    }
+    let micros = u64::try_from(start.elapsed().as_micros())
+        .unwrap_or(u64::MAX)
+        .max(1);
+    let mb_per_s = 4 * 2 * 1_000_000 / micros;
+    d.measure("counting speed at 2 MB (MB of votes per second)", mb_per_s);
+    d.charts.push(Histogram {
+        title: format!(
+            "Voices recovered from one tally, by number of voices ({} trials, 100 decoys each)",
+            trials
+        ),
+        unit: "% of voices found again".into(),
+        start: 0,
+        width: 1,
+        series,
+        labels: CAPACITY_VOICES.iter().map(|k| format!("k={k}")).collect(),
+    });
+    d.result = format!(
+        "{}; counting speed about {} MB/s",
+        parts.join("; "),
+        grouped(mb_per_s)
+    );
+    d.expected = "512 bits, 8 voices: at least 99% and 5 sigma; 4096 bits, 32 voices: at least 99%; 64 bits, 8 voices: at most 60% and 3 sigma".into();
+    d
+}
+
+/// Noise of `memory.residue`: each bit flipped with probability 26/256 (10.2%).
+const FLIP_10: u64 = 26;
+
+/// Certainty below which a bit is uncertain in `memory.residue`.
+const UNCERTAIN_BELOW: u8 = 3;
+
+fn residue(inputs: &mut Inputs, _: &Path) -> Draft {
+    let mut d = Draft::new(
+        "memory.residue",
+        "memory",
+        "With 5 voices agreeing and 3 saying something else, the reading follows the 5, the residue of the 3 is large, and the uncertain counters mark where the two groups disagree.",
+    );
+    d.explain(
+        "The residue is what the majority discarded of a voice: the base form of Mutation, and the way the minority is heard instead of erased. The counters say how sure each bit is: near 0 where the voices disagree. So one vote gives three things: the decision, who was outvoted and by how much, and where the doubt is.",
+        "In 32 trials, 5 voices are copies of a pattern A and 3 of a pattern B (each copy with 10% of its bits flipped); all 8 are counted in one 512-bit tally. Measured: the distance of the reading from A; the residue (voice XOR reading) of the 5 and of the 3; the uncertain mask (counters with absolute value below 3) against the bits where A and B differ. Thresholds written before the first run, from a simulation of this model: residue of the 3 at least 180 bits (expected 209), of the 5 at most 100 (73); reading within 80 bits of A (50); mask recall at least 75% (82%) and precision at least 90% (96%). Control that must fail: 8 voices all from A: uncertain bits at most 40 (20) and residue of its last 3 at most 80 (52), i.e. no minority.",
+    );
+    let trials = 32u64;
+    let (mut read_a, mut maj, mut min, mut uncertain, mut hits, mut differ) =
+        (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
+    let (mut ctl_uncertain, mut ctl_residue) = (0u64, 0u64);
+    let (mut certainty, mut ctl_certainty) = (vec![0u64; 9], vec![0u64; 9]);
+    let res = |t: &Tally, v: &[Word]| t.residue(v).map_or(512, |r| word::popcount(&r));
+    for _ in 0..trials {
+        let a = inputs.monade(Size::BLOCK);
+        let b = inputs.monade(Size::BLOCK);
+        let mut voices: Vec<Vec<Word>> = (0..5).map(|_| inputs.noisy(&a, FLIP_10)).collect();
+        voices.extend((0..3).map(|_| inputs.noisy(&b, FLIP_10)));
+        let t = tally_of(Size::BLOCK, &voices);
+        read_a += word::hamming(&t.read(), &a).unwrap_or(512);
+        maj += voices[..5].iter().map(|v| res(&t, v)).sum::<u64>();
+        min += voices[5..].iter().map(|v| res(&t, v)).sum::<u64>();
+        let mask = t.uncertain(UNCERTAIN_BELOW);
+        let diff: Vec<Word> = a.iter().zip(&b).map(|(x, y)| x.xor(*y)).collect();
+        let both: Vec<Word> = mask.iter().zip(&diff).map(|(m, x)| m.and(*x)).collect();
+        uncertain += word::popcount(&mask);
+        hits += word::popcount(&both);
+        differ += word::popcount(&diff);
+        for (slot, n) in certainty.iter_mut().zip(t.certainty_histogram()) {
+            *slot += n;
+        }
+        let agreeing: Vec<Vec<Word>> = (0..8).map(|_| inputs.noisy(&a, FLIP_10)).collect();
+        let c = tally_of(Size::BLOCK, &agreeing);
+        ctl_uncertain += word::popcount(&c.uncertain(UNCERTAIN_BELOW));
+        ctl_residue += agreeing[5..].iter().map(|v| res(&c, v)).sum::<u64>();
+        for (slot, n) in ctl_certainty.iter_mut().zip(c.certainty_histogram()) {
+            *slot += n;
+        }
+    }
+    let read_a = read_a * 10 / trials;
+    let maj = maj * 10 / (5 * trials);
+    let min = min * 10 / (3 * trials);
+    let recall = hits * 1000 / differ.max(1);
+    let precision = hits * 1000 / uncertain.max(1);
+    let chance = differ * 1000 / (512 * trials);
+    let ctl_uncertain = ctl_uncertain * 10 / trials;
+    let ctl_residue = ctl_residue * 10 / (3 * trials);
+    d.passed = min >= 1800
+        && maj <= 1000
+        && read_a <= 800
+        && recall >= 750
+        && precision >= 900
+        && ctl_uncertain <= 400
+        && ctl_residue <= 800;
+    d.measure("distance of the reading from A", tenths(read_a));
+    d.measure("residue of the 5 (majority), mean", tenths(maj));
+    d.measure("residue of the 3 (minority), mean", tenths(min));
+    d.measure(
+        "uncertain bits (|counter| < 3), mean",
+        tenths(uncertain * 10 / trials),
+    );
+    d.measure(
+        "mask recall: disagreements found",
+        format!("{}%", tenths(recall)),
+    );
+    d.measure(
+        "mask precision: marks that are disagreements",
+        format!("{}%", tenths(precision)),
+    );
+    d.measure(
+        "precision by chance (share of bits where A and B differ)",
+        format!("{}%", tenths(chance)),
+    );
+    d.measure("control: uncertain bits, mean", tenths(ctl_uncertain));
+    d.measure("control: residue of the last 3, mean", tenths(ctl_residue));
+    let scale = |v: Vec<u64>| v.iter().map(|n| n / trials).collect::<Vec<u64>>();
+    d.charts.push(Histogram {
+        title:
+            "Certainty of the counters (|counter|) in a 512-bit tally of 8 voices, mean per trial"
+                .into(),
+        unit: "bits with each certainty (0 = tie, 8 = all 8 voices agree)".into(),
+        start: 0,
+        width: 1,
+        series: vec![
+            Series {
+                name: "5 agree, 3 differ".into(),
+                counts: scale(certainty),
+            },
+            Series {
+                name: "control: 8 agree".into(),
+                counts: scale(ctl_certainty),
+            },
+        ],
+        labels: (0..=8).map(|c| c.to_string()).collect(),
+    });
+    d.result = format!(
+        "{trials} trials of 5 + 3 voices in 512 bits: reading {} bits from A; residue of the 3 = {} bits vs the 5 = {}; uncertain mask: recall {}%, precision {}% (chance {}%); control of 8 agreeing: {} uncertain bits, residue of the last 3 = {}",
+        tenths(read_a),
+        tenths(min),
+        tenths(maj),
+        tenths(recall),
+        tenths(precision),
+        tenths(chance),
+        tenths(ctl_uncertain),
+        tenths(ctl_residue)
+    );
+    d.expected = "residue of the 3 at least 180, of the 5 at most 100; reading within 80 of A; recall at least 75%, precision at least 90%; control: at most 40 uncertain bits, residue of the last 3 at most 80".into();
+    d
+}
+
 fn foundations(_: &mut Inputs, dir: &Path) -> Draft {
     let mut d = Draft::new(
         "foundations.read",
@@ -939,7 +1315,7 @@ mod tests {
     fn every_check_passes_on_a_new_mind() {
         let dir = std::env::temp_dir().join(format!("monade-check-{}", std::process::id()));
         let out = all(&dir);
-        assert_eq!(out.len(), 12);
+        assert_eq!(out.len(), 15);
         for o in &out {
             assert!(o.passed, "{}: {}", o.id, o.result);
         }

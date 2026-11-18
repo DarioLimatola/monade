@@ -62,9 +62,11 @@ crates/
     src/space.rs      generated space (GEN): vectors from id/name + seed, BLAKE3 v1
     src/address.rs    octal address: root + base-8 path (down, up, offset, Morton
                       point, packed 56 bits), Arena::part
+    src/tally.rs      counters per bit (i8, saturating ±127): add, subtract, read
+                      (sign; tie = 0), certainty, uncertain mask, residue, merge, decay
     src/oracle.rs     slow references + state_hash() (tests / feature `oracle`)
   monade-run/         CLI, the only writer of point 0 and specs
-    src/check.rs      `check`: 9 checks that say in words and numbers what they verified
+    src/check.rs      `check`: 15 checks that say in words and numbers what they verified
     src/runs.rs       run folders: runs/YYYYMMDD-HHMMSS/{run.json, results.jsonl}
     src/report.rs     `report`: one self-contained HTML page (history + latest run)
   xtask/              `cargo all`: every check
@@ -108,6 +110,18 @@ prereg/ ladder/ properties/ worlds/ benches/   empty for now
 - **Majority:** a bit is set when more than half of the inputs are set; a tie gives 0.
 - **state_hash:** FNV-1a 64 over little-endian bytes; for comparing runs, not
   cryptographic. (The generated space, step 4, needs a cryptographic-quality hash.)
+- **Counters per bit (step 5, council session 11; Proposed until the author confirms):**
+  `Tally` owns one `i8` per bit, stored apart from the bits (64 counters of one word =
+  one 64-byte cache line); symmetric limit ±127 (−128 unused), saturating, never
+  wrapping. Weights are integers 1 to 127. `is_exact()` is true while nothing was
+  clamped or decayed: then add/subtract are inverses and the reading is the majority.
+  `decay(k)` is linear (the structure's sleep rule: subtract the same amount from all
+  counters), never crosses 0, keeps the voices, and returns how many bits went back to
+  point 0. Residue in both forms: per voice (`residue`) and global (`uncertain`).
+  Plain array first; a bit-sliced fast path only after a measurement shows the need.
+  Tallies are standalone; an arena of tallies waits for the blackboard (step 6).
+  The niche reserve (nothing that is the last of its kind disappears) is enforced by
+  sleep (step 14), where kinds exist; `decay` reports what it erased so sleep can.
 - Arenas store words contiguously (`Vec<Word>`, 8-byte aligned). 64-byte alignment
   of arena storage is deferred to the fast paths, with measurements.
 
@@ -121,7 +135,8 @@ prereg/ ladder/ properties/ worlds/ benches/   empty for now
 3c. ✅ Octal address (`address.rs`), with its check.
 4. ✅ Space: generated vectors from seed + id (Logos `GEN`); hash version 1 = BLAKE3
    (official crate), keyed from the seed, context "monade space v1".
-5. Counters per bit: add, read by majority, certainty, residue (test 19).
+5. ✅ Counters per bit (`tally.rs`): add, read by majority, certainty, residue, merge,
+   decay; checks `memory.reinforcement`, `memory.capacity`, `memory.residue` (test 19).
 6. Blackboard: Monade of 8^4 bits, voices bound to keys, consensus, residue (test 19).
 7. Ternary unit with homeostasis; rungs 0–4.
 8. Test 8 (determinism, across machines).
@@ -174,3 +189,10 @@ cargo run -p monade-run -- set-spec KEY VALUE --motive M
 - **2026-11-18 · v0.4.1.** Rust pinned to 1.97.0 (`rust-toolchain.toml`), after a new
   clippy rule of Rust 1.100 failed on one machine only. v0.4.0 confirmed on Windows:
   12/12, generated-space fingerprint identical to Linux.
+- **2026-11-18 · v0.5.0.** Step 5, the first learning: `tally` (counters per bit) with
+  property tests against a bit-by-bit oracle, and three checks with thresholds written
+  before the first run and a control that must fail each. Measured on Linux: a pattern
+  seen 64 times with 30% noise read back at 0.2 bits (predicted 0.2); 8 voices in 512
+  bits 99.6% recovered at 6.2 sigma, in 64 bits only 35% (2.1 sigma); with 5 + 3 voices
+  the residue of the 3 is 208.5 bits vs 73.2 of the 5, and the uncertain mask finds 82%
+  of the disagreements at 95% precision. 15 checks. Next: step 6, the blackboard.
