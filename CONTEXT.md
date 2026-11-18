@@ -3,7 +3,7 @@
 Read this first. Update it at the end of every session (section "Sessions").
 Helpers change; this file stays.
 
-## Guiding principle (the Demiurge's)
+## Guiding principle (the author's)
 
 **Simplicity, elegance and recursion.** Little code, clear, repeating the same at
 every scale; no superfluous abstraction; the same rule at every level.
@@ -15,16 +15,18 @@ by the same `record` module.
 
 ## Who decides
 
-- **The Demiurge** (the owner) designs and decides. Only he writes point 0 and the
+- **The author** (the owner) designs and decides. Only he writes point 0 and the
   specifications, through `monade-run`.
 - The mind may propose, never write foundations.
 - The design lives in the claude.ai project "Tesseract": `claude/tesseract-structure-v5.md`
-  is the source of truth; the council is in `claude/agents/consiglio.md`.
+  together with `claude/monade-parliament.md` (part 2) is the source of truth; a copy
+  of part 2 is in `docs/design/`.
   Anything not confirmed there is labelled **Proposed**.
+- Wording: where a conventional technical term exists, use it (e.g. **seed**).
 
 ## Language
 
-Code, identifiers, comments, documents: English. Conversation with the Demiurge:
+Code, identifiers, comments, documents: English. Conversation with the author:
 Italian, brief and essential; instructions for Windows.
 
 ## Rules
@@ -33,13 +35,16 @@ Italian, brief and essential; instructions for Windows.
    one is property-tested against it (`proptest`).
 2. No `unsafe` (forbidden by lint). No floating point in `monade-core`: no
    floating-point type even in comments (checked by `cargo all`).
-3. `monade-core` has no dependencies (only `proptest` for tests).
+3. Reuse well-maintained open-source libraries where possible and efficient (a
+   criterion of good programming). `monade-core` keeps few, vetted ones (next: the
+   official `blake3`). `monade-run` uses `serde` and `serde_json`.
 4. Errors are values; library code never panics on bad input.
 5. Every public item has documentation and a runnable example.
 6. Small modules, one job each; tests next to the code.
 7. Measure before optimising: no fast path without a before/after number.
 8. Before every commit: `cargo all` (fmt, clippy `-D warnings`, no-float, tests in
    debug and release). CI runs the same command on Windows and Linux.
+9. This repository holds only the engine and its technical design.
 
 ## Structure
 
@@ -54,9 +59,14 @@ crates/
     src/size.rs       sizes 64 bits → 2 MB (powers of 8), arenas, Ref::ORIGIN
     src/oracle.rs     slow references + state_hash() (tests / feature `oracle`)
   monade-run/         CLI, the only writer of point 0 and specs
+    src/check.rs      `check`: 9 checks that say in words and numbers what they verified
+    src/runs.rs       run folders: runs/YYYYMMDD-HHMMSS/{run.json, results.jsonl}
+    src/report.rs     `report`: one self-contained HTML page (history + latest run)
   xtask/              `cargo all`: every check
 fuzz/                 cargo-fuzz target for the log readers (Linux, nightly)
-prereg/ ladder/ properties/ worlds/ benches/ docs/   empty for now
+runs/                 results of `check` (one folder per run, never overwritten)
+docs/                 design copied from the project (structure, part 2)
+prereg/ ladder/ properties/ worlds/ benches/   empty for now
 .github/workflows/ci.yml   Windows + Linux; nightly fuzzing
 ```
 
@@ -91,17 +101,24 @@ prereg/ ladder/ properties/ worlds/ benches/ docs/   empty for now
 2. ✅ Point 0 mechanism (empty) and specifications with the locked seed + log
    invariants + fuzzing of the reader.
 3. ✅ Sizes, arenas, fast = slow.
-4. Space: generated vectors from (seed, address) with a cryptographic-quality hash.
-5. Ternary unit with homeostasis; rungs 0–4.
-6. Test 8 (determinism).
-7. Impulse with budget and metrology (test 6).
-8. Learning cycle with two levels (test 2).
-9. Composition and capacity (test 3).
-10. Sleep and quiet (test 5).
-11. Calibration (test 4).
-12. Atom (test 1).
-13. Peirce (test 7).
-14. Adapters, then monitor.
+3b. ✅ `monade-run check` (readable results) + run folders + `monade-run report` (HTML).
+4. Space: generated vectors from seed + address (Logos `GEN`); hash version 1 =
+   BLAKE3 (official crate), keyed from the seed, context "monade space v1".
+5. Counters per bit: add, read by majority, certainty, residue (test 19).
+6. Blackboard: Monade of 8^4 bits, voices bound to keys, consensus, residue (test 19).
+7. Ternary unit with homeostasis; rungs 0–4.
+8. Test 8 (determinism, across machines).
+9. Impulse with budget and metrology (test 6).
+10. Learning cycle with two levels (test 2).
+11. Composition and capacity, with PERM and MATCH (test 3).
+12. Logos v1: 64-bit instruction, interpreter of 8 primitives, budget, depth ≤ 8,
+    128-bit content hash, text ↔ binary form.
+13. Layers: XOR overlay virtualisation (depth ≤ 8, apply or discard); scars in a
+    Bloom filter.
+14. Sleep and quiet (test 5): consolidation, subsumption (test 18), compaction,
+    compiling upward.
+15. Calibration (4), atom (1), Peirce (7), Swadesh (20), communication (21); then
+    adapters and monitor (multi-dimensional map with forces, test 17).
 
 ## Commands (Windows: PowerShell or cmd, same commands)
 
@@ -109,6 +126,8 @@ prereg/ ladder/ properties/ worlds/ benches/ docs/   empty for now
 cargo test                                   all tests
 cargo all                                    every check, as CI
 cargo run -p monade-run -- show              point 0 and specifications
+cargo run -p monade-run -- check             verify; results saved in runs/
+cargo run -p monade-run -- report            report.html from every run
 cargo run -p monade-run -- append-foundation --name N --text T --motive M
 cargo run -p monade-run -- set-spec KEY VALUE --motive M
 ```
@@ -116,6 +135,13 @@ cargo run -p monade-run -- set-spec KEY VALUE --motive M
 ## Sessions
 
 - **2026-11-18 · draft 1.** Steps 1–3 written. 122 tests (unit, property, doc)
-  green on Linux with `cargo all`; Windows to be confirmed by CI or the Demiurge.
+  green on Linux with `cargo all`; Windows to be confirmed.
   Next: step 4 (generated space): choose the hash (cryptographic quality, no
-  dependency or a pinned one, decided by the Demiurge) and its version 1.
+  dependency or a pinned one) and its version 1.
+- **2026-11-18 · v0.2.0.** Design of council session 9 recorded in `docs/design/`
+  (experts as Monadi, blackboard, residue, Logos, mechanisms, hash). Step 3b
+  written: `check`,
+  run folders, `report`. Golden state hashes fixed in `check.rs`: the same numbers
+  must appear on every machine: confirmed on Linux and on Windows (x86_64, AVX2,
+  20 threads), all 9 checks passed. The alias is `cargo all`
+  (older notes said `cargo ci`).
