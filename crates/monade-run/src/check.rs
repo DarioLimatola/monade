@@ -6,6 +6,7 @@
 use monade_core::address::Address;
 use monade_core::oracle;
 use monade_core::size::{Arena, Size};
+use monade_core::space::Space;
 use monade_core::specs::{Specs, SEED_KEY};
 use monade_core::word::{self, Word};
 use serde::{Deserialize, Serialize};
@@ -127,7 +128,7 @@ impl Inputs {
 /// Runs every check, in order, on the foundations in `dir`.
 pub fn all(dir: &Path) -> Vec<Outcome> {
     let mut inputs = Inputs::new();
-    let checks: [fn(&mut Inputs, &Path) -> Draft; 10] = [
+    let checks: [fn(&mut Inputs, &Path) -> Draft; 12] = [
         determinism,
         xor_laws,
         fast_equals_slow,
@@ -137,6 +138,8 @@ pub fn all(dir: &Path) -> Vec<Outcome> {
         sizes,
         arenas,
         octal_address,
+        generated_space,
+        sentence,
         foundations,
     ];
     checks
@@ -709,6 +712,180 @@ fn octal_address(inputs: &mut Inputs, _: &Path) -> Draft {
     d
 }
 
+/// The space of the mind in `dir` (genesis if the specifications cannot be read).
+fn space_of(dir: &Path) -> Space {
+    store::load_specs(dir)
+        .ok()
+        .and_then(|s| Space::from_specs(&s).ok())
+        .unwrap_or_else(Space::genesis)
+}
+
+/// Fingerprint of blocks of ids 0..64 of the genesis space (as in `monade-core`).
+const GOLDEN_SPACE: u64 = 0x1125_fbd0_ff9f_9379;
+
+fn generated_space(inputs: &mut Inputs, dir: &Path) -> Draft {
+    let mut d = Draft::new(
+        "space.generated",
+        "space",
+        "Basic vectors are computed, not stored: the same id gives the same vector on every machine, different ids are strangers, and any block can be computed alone.",
+    );
+    d.explain(
+        "Every axis, role and word of the mind needs its own random vector. Generating them from the seed means they cost no memory until used, are identical everywhere, and form one space per mind: another seed would be another mind.",
+        "BLAKE3 keyed by the seed (context \"monade space v1\") turns an id into a stream of bits. The check compares a fingerprint of 64 generated blocks with the value fixed when version 1 was written, measures the distance between 1 000 pairs of generated vectors, checks that any block of a 2 MB vector computed alone equals the same block of the whole vector, and times the generation.",
+    );
+    let space = space_of(dir);
+    let ids: Vec<Word> = (0..64)
+        .flat_map(|id| space.generate(id, Size::BLOCK))
+        .collect();
+    let fingerprint = oracle::state_hash(&ids);
+    let golden_ok = space != Space::genesis() || fingerprint == GOLDEN_SPACE;
+    let pairs = 1_000u64;
+    let mut values = Vec::new();
+    for _ in 0..pairs {
+        let (a, b) = (inputs.next(), inputs.next());
+        if a == b {
+            continue;
+        }
+        let h = word::hamming(
+            &space.generate(a, Size::BLOCK),
+            &space.generate(b, Size::BLOCK),
+        )
+        .unwrap_or(0);
+        values.push(h);
+    }
+    let sum: u64 = values.iter().sum();
+    let n = values.len() as u64;
+    let min = values.iter().copied().min().unwrap_or(0);
+    let mean_ok = {
+        let dev = sum.abs_diff(n * 256);
+        dev * dev <= 4 * n * 512
+    };
+    let width = 5;
+    let start = 256 - 20 * width;
+    d.charts.push(Histogram {
+        title: format!(
+            "Distance between the generated vectors of two different ids ({} pairs, 512 bits)",
+            grouped(n)
+        ),
+        unit: "bits of difference".into(),
+        start,
+        width,
+        series: vec![Series {
+            name: "generated pairs".into(),
+            counts: histogram(&values, start, width, 40),
+        }],
+    });
+    let thoughts = 8u64;
+    let mut same = 0u64;
+    let start_time = Instant::now();
+    for _ in 0..thoughts {
+        let id = inputs.next();
+        let whole = space.generate(id, Size::THOUGHT);
+        let k = inputs.next() % 32_768;
+        let block = space.block(id, k);
+        let at = (k * 8) as usize;
+        same += u64::from(whole.get(at..at + 8) == Some(&block.0[..]));
+    }
+    let micros = u64::try_from(start_time.elapsed().as_micros())
+        .unwrap_or(u64::MAX)
+        .max(1);
+    let mb_per_s = thoughts * 2 * 1_000_000 / micros;
+    d.passed = golden_ok && mean_ok && min > 190 && same == thoughts;
+    d.result = format!(
+        "fingerprint {fingerprint:#018x} ({}); {} pairs of ids: mean distance {} of 512, closest {min}; any block of a 2 MB vector computed alone: {same}/{thoughts} identical; speed about {} MB/s",
+        if golden_ok { "as fixed" } else { "CHANGED" },
+        grouped(n),
+        tenths(sum * 10 / n.max(1)),
+        grouped(mb_per_s)
+    );
+    d.expected = format!(
+        "fingerprint {GOLDEN_SPACE:#018x}; mean 256; closest above 190; all blocks identical"
+    );
+    d.measure("fingerprint", format!("{fingerprint:#018x}"));
+    d.measure("seed", format!("{:#018x}", space.seed()));
+    d.measure("mean distance (512 bits)", tenths(sum * 10 / n.max(1)));
+    d.measure("closest pair", min);
+    d.measure("blocks identical", format!("{same}/{thoughts}"));
+    d.measure("generation speed (MB/s)", mb_per_s);
+    d
+}
+
+fn sentence(_: &mut Inputs, dir: &Path) -> Draft {
+    let mut d = Draft::new(
+        "space.sentence",
+        "space",
+        "A sentence is one 512-bit block: \"the dog sleeps\" bound role by role and bundled; asking a role gives back its word.",
+    );
+    d.explain(
+        "This is composition: several ideas, each tied to its role, held in one vector and taken apart again by asking. It is the first time the Monade represents something built from generated vectors; nothing is learned, it is pure algebra.",
+        "Words and roles are generated from their names. The sentence is the majority of (subject XOR dog), (verb XOR sleep) and (time XOR present). Asking a role means XOR of the sentence with the role, then finding the nearest word of a vocabulary of 8. A second sentence, \"the cat ran\", must give different answers.",
+    );
+    let space = space_of(dir);
+    let v = |n: &str| space.named(n, Size::BLOCK);
+    let vocabulary = [
+        "it.cane",
+        "it.gatto",
+        "it.dormire",
+        "it.correre",
+        "tempo.presente",
+        "tempo.passato",
+        "it.casa",
+        "it.mangiare",
+    ];
+    let roles = ["ruolo.soggetto", "ruolo.verbo", "ruolo.tempo"];
+    let sentences: [[&str; 3]; 2] = [
+        ["it.cane", "it.dormire", "tempo.presente"],
+        ["it.gatto", "it.correre", "tempo.passato"],
+    ];
+    let mut right = 0u64;
+    let mut lines = Vec::new();
+    let mut worst_margin = u64::MAX;
+    for words in sentences {
+        let bound: Vec<Vec<Word>> = roles
+            .iter()
+            .zip(words)
+            .map(|(r, w)| v(r).iter().zip(v(w)).map(|(a, b)| a.xor(b)).collect())
+            .collect();
+        let refs: Vec<&[Word]> = bound.iter().map(Vec::as_slice).collect();
+        let mut s = vec![Word::ZERO; Size::BLOCK.words()];
+        if word::majority(&refs, &mut s).is_err() {
+            d.passed = false;
+            continue;
+        }
+        let mut answers = Vec::new();
+        for (role, expected) in roles.iter().zip(words) {
+            let query: Vec<Word> = s.iter().zip(v(role)).map(|(a, b)| a.xor(b)).collect();
+            let mut ranked: Vec<(u64, &str)> = vocabulary
+                .iter()
+                .map(|w| (word::hamming(&query, &v(w)).unwrap_or(u64::MAX), *w))
+                .collect();
+            ranked.sort();
+            let (best, name) = ranked[0];
+            let next = ranked[1].0;
+            worst_margin = worst_margin.min(next.saturating_sub(best));
+            right += u64::from(name == expected);
+            answers.push(format!(
+                "{}? {name} ({best}, next {next})",
+                role.trim_start_matches("ruolo.")
+            ));
+            d.measure(
+                &format!("{} / {}: answer", words[0], role),
+                format!("{name} at {best}, next {next}"),
+            );
+        }
+        lines.push(format!("[{}] {}", words.join(" "), answers.join(", ")));
+    }
+    d.passed &= right == 6;
+    d.result = format!(
+        "{}; right answers {right}/6; smallest margin {worst_margin} bits",
+        lines.join("; ")
+    );
+    d.expected = "6/6 right; each answer near 128 bits, every other word near 256".into();
+    d.measure("right answers", format!("{right}/6"));
+    d.measure("smallest margin (bits)", worst_margin);
+    d
+}
+
 fn foundations(_: &mut Inputs, dir: &Path) -> Draft {
     let mut d = Draft::new(
         "foundations.read",
@@ -762,7 +939,7 @@ mod tests {
     fn every_check_passes_on_a_new_mind() {
         let dir = std::env::temp_dir().join(format!("monade-check-{}", std::process::id()));
         let out = all(&dir);
-        assert_eq!(out.len(), 10);
+        assert_eq!(out.len(), 12);
         for o in &out {
             assert!(o.passed, "{}: {}", o.id, o.result);
         }

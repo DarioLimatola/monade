@@ -16,9 +16,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # The version comes from rust-toolchain.toml; rustup installs it on first use.
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       # fmt, clippy -D warnings, no floating point in monade-core, tests debug + release
       - run: cargo all

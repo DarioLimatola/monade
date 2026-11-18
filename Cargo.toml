@@ -4,7 +4,7 @@ members = ["crates/monade-core", "crates/monade-run", "crates/xtask"]
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.3.1"
+version = "0.4.1"
 edition = "2021"
 publish = false
 
@@ -14,3 +14,7 @@ missing_docs = "warn"
 
 [workspace.lints.clippy]
 float_arithmetic = "warn"
+
+# The hash is fast only when optimised; optimise it even in debug builds.
+[profile.dev.package.blake3]
+opt-level = 3

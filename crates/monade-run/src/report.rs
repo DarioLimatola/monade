@@ -68,8 +68,10 @@ dl{max-width:820px} dt{font-weight:600;margin-top:8px} dd{margin:0 0 0 16px;colo
 const TODAY: &str = "Today the Monade is an algebra and a memory container: \
 vectors of bits from 64 bits to 2 MB, the operations that bind (XOR), compare \
 (Hamming distance) and superpose (majority) them, arenas that store them, an octal \
-address that reaches any part down to one bit, and the foundations (point 0, still \
-empty, and the specifications with the locked seed). It does not learn yet: \
+address that reaches any part down to one bit, the generated space (every basic \
+vector computed from an id and the seed, with BLAKE3), and the foundations (point 0, \
+still empty, and the specifications with the locked seed). It can already compose: \
+a sentence held in one block and taken apart by asking its roles. It does not learn yet: \
 learning starts with the counters (step 5), the ternary unit (step 7) and the \
 learning cycle (step 10). These checks prove that the ground it will stand on is exact.";
 

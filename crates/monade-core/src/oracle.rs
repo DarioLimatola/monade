@@ -138,6 +138,27 @@ pub fn morton_point(offset: u64, e: u8) -> (u32, u32, u32) {
     (x, y, z)
 }
 
+/// The generated vector of `id`, the slow way: re-derive the key from the seed,
+/// read the output one byte at a time from the start, assemble words by shifts.
+pub fn generate(space: &crate::space::Space, id: u64, words: usize) -> Vec<Word> {
+    let key = blake3::derive_key(crate::space::CONTEXT_V1, &space.seed().to_le_bytes());
+    let mut h = blake3::Hasher::new_keyed(&key);
+    h.update(&[0u8]);
+    h.update(&id.to_le_bytes());
+    let mut r = h.finalize_xof();
+    let mut out = Vec::new();
+    for _ in 0..words {
+        let mut w = 0u64;
+        for i in 0..8 {
+            let mut byte = [0u8; 1];
+            r.fill(&mut byte);
+            w |= u64::from(byte[0]) << (8 * i);
+        }
+        out.push(Word::new(w));
+    }
+    out
+}
+
 /// Hash of a state: FNV-1a over the little-endian bytes of every word.
 ///
 /// For checking that two runs reached the same state; not cryptographic.

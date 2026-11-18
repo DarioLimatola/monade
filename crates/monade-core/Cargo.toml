@@ -1,6 +1,6 @@
 [package]
 name = "monade-core"
-description = "The core of the Monade: words, point 0, specifications, sizes. No dependencies, no floating point."
+description = "The core of the Monade: words, point 0, specifications, sizes, addresses, the generated space. No floating point."
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -11,6 +11,9 @@ publish.workspace = true
 oracle = []
 
 [dependencies]
+# The hash of the generated space (version 1). `pure`: Rust only, no C or assembly
+# to build, the same on Windows and Linux.
+blake3 = { version = "1.8", default-features = false, features = ["pure", "std"] }
 
 [dev-dependencies]
 proptest = "1.12"
