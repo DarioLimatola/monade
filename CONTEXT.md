@@ -45,6 +45,8 @@ Italian, brief and essential; instructions for Windows.
 8. Before every commit: `cargo all` (fmt, clippy `-D warnings`, no-float, tests in
    debug and release). CI runs the same command on Windows and Linux.
 9. This repository holds only the engine and its technical design.
+10. Rust version pinned in `rust-toolchain.toml` (1.97.0): rustup uses it in this folder
+    automatically. Raise it on purpose, in its own commit, after `cargo all` passes.
 
 ## Structure
 
@@ -169,3 +171,6 @@ cargo run -p monade-run -- set-spec KEY VALUE --motive M
 - **2026-11-18 · v0.4.0.** Step 4: the generated space (BLAKE3 v1) and two checks,
   `space.generated` and `space.sentence` ("the dog sleeps" answered role by role,
   6/6, margin ≥ 105 bits). Next: step 5, counters per bit (the first learning).
+- **2026-11-18 · v0.4.1.** Rust pinned to 1.97.0 (`rust-toolchain.toml`), after a new
+  clippy rule of Rust 1.100 failed on one machine only. v0.4.0 confirmed on Windows:
+  12/12, generated-space fingerprint identical to Linux.

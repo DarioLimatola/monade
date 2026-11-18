@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 — 2026-11-18
+
+- Rust version pinned: `rust-toolchain.toml` (1.97.0, with clippy and rustfmt); CI uses it.
+- `as_chunks` instead of `chunks_exact` (a clippy rule of newer Rust).
+- v0.4.0 confirmed on Windows: the generated space has the same fingerprint as on Linux.
+
 ## 0.4.0 — 2026-11-18
 
 - Step 4, the generated space (`monade_core::space`, Logos `GEN`): basic vectors

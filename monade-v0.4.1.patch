@@ -1,0 +1,128 @@
+From af1d0594a30d139202ef677c1c63007d15f3bbab Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 18 Nov 2026 21:17:39 +0100
+Subject: [PATCH] v0.4.1: pin Rust 1.97.0 (rust-toolchain.toml); CI uses it
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01UxGNSxSZrfE4udxDhHPX5A
+---
+ .github/workflows/ci.yml | 5 ++---
+ CHANGELOG.md             | 6 ++++++
+ CONTEXT.md               | 5 +++++
+ Cargo.lock               | 6 +++---
+ Cargo.toml               | 2 +-
+ rust-toolchain.toml      | 6 ++++++
+ 6 files changed, 23 insertions(+), 7 deletions(-)
+ create mode 100644 rust-toolchain.toml
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 4830acb..f6cd8e9 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -16,9 +16,8 @@ jobs:
+     runs-on: ${{ matrix.os }}
+     steps:
+       - uses: actions/checkout@v4
+-      - uses: dtolnay/rust-toolchain@stable
+-        with:
+-          components: rustfmt, clippy
++      # The version comes from rust-toolchain.toml; rustup installs it on first use.
++      - run: rustup toolchain install
+       - uses: Swatinem/rust-cache@v2
+       # fmt, clippy -D warnings, no floating point in monade-core, tests debug + release
+       - run: cargo all
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index c8a36a8..a42450a 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,11 @@
+ # Changelog
+ 
++## 0.4.1 — 2026-11-18
++
++- Rust version pinned: `rust-toolchain.toml` (1.97.0, with clippy and rustfmt); CI uses it.
++- `as_chunks` instead of `chunks_exact` (a clippy rule of newer Rust).
++- v0.4.0 confirmed on Windows: the generated space has the same fingerprint as on Linux.
++
+ ## 0.4.0 — 2026-11-18
+ 
+ - Step 4, the generated space (`monade_core::space`, Logos `GEN`): basic vectors
+diff --git a/CONTEXT.md b/CONTEXT.md
+index f3ea42f..500caa2 100644
+--- a/CONTEXT.md
++++ b/CONTEXT.md
+@@ -45,6 +45,8 @@ Italian, brief and essential; instructions for Windows.
+ 8. Before every commit: `cargo all` (fmt, clippy `-D warnings`, no-float, tests in
+    debug and release). CI runs the same command on Windows and Linux.
+ 9. This repository holds only the engine and its technical design.
++10. Rust version pinned in `rust-toolchain.toml` (1.97.0): rustup uses it in this folder
++    automatically. Raise it on purpose, in its own commit, after `cargo all` passes.
+ 
+ ## Structure
+ 
+@@ -169,3 +171,6 @@ cargo run -p monade-run -- set-spec KEY VALUE --motive M
+ - **2026-11-18 · v0.4.0.** Step 4: the generated space (BLAKE3 v1) and two checks,
+   `space.generated` and `space.sentence` ("the dog sleeps" answered role by role,
+   6/6, margin ≥ 105 bits). Next: step 5, counters per bit (the first learning).
++- **2026-11-18 · v0.4.1.** Rust pinned to 1.97.0 (`rust-toolchain.toml`), after a new
++  clippy rule of Rust 1.100 failed on one machine only. v0.4.0 confirmed on Windows:
++  12/12, generated-space fingerprint identical to Linux.
+diff --git a/Cargo.lock b/Cargo.lock
+index 143e8f7..d83ccc7 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -224,7 +224,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+ 
+ [[package]]
+ name = "monade-core"
+-version = "0.4.0"
++version = "0.4.1"
+ dependencies = [
+  "blake3",
+  "proptest",
+@@ -232,7 +232,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "monade-run"
+-version = "0.4.0"
++version = "0.4.1"
+ dependencies = [
+  "monade-core",
+  "serde",
+@@ -519,7 +519,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "xtask"
+-version = "0.4.0"
++version = "0.4.1"
+ 
+ [[package]]
+ name = "zmij"
+diff --git a/Cargo.toml b/Cargo.toml
+index d7bde6b..f4e8d78 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -4,7 +4,7 @@ members = ["crates/monade-core", "crates/monade-run", "crates/xtask"]
+ exclude = ["fuzz"]
+ 
+ [workspace.package]
+-version = "0.4.0"
++version = "0.4.1"
+ edition = "2021"
+ publish = false
+ 
+diff --git a/rust-toolchain.toml b/rust-toolchain.toml
+new file mode 100644
+index 0000000..1c55893
+--- /dev/null
++++ b/rust-toolchain.toml
+@@ -0,0 +1,6 @@
++# The Rust version of the Monade, the same on every machine and in CI, so that
++# formatting and clippy rules never differ. Change it on purpose, in its own commit.
++[toolchain]
++channel = "1.97.0"
++components = ["clippy", "rustfmt"]
++profile = "minimal"
+-- 
+2.43.0
+
