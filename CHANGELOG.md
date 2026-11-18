@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0 — 2026-11-18
+
+- Step 5, the first learning: counters per bit (`monade_core::tally`). One signed
+  counter per bit (`i8`, symmetric, saturating at ±127, never wrapping): a vote adds
+  `+w` on the 1-bits and `-w` on the 0-bits; the reading is the sign (a tie reads 0).
+  `add`, `add_weighted` (weight 1 to 127), `subtract`, `read`, `uncertain`,
+  `certainty_histogram`, `residue` (voice XOR reading), `merge` (two cores count apart),
+  `decay` (forgetting: towards 0, never across), `voices`, `is_exact`.
+- Slow references `oracle::tally`, `tally_read`, `tally_uncertain` (bit by bit, wide
+  integers). Property tests: reading = majority, order-free, merge of halves = all,
+  merge commutative, subtract inverts add, decay never flips a sign, saturation never
+  wraps, fast = slow, wrong lengths are errors; a 2 MB tally reads its majority.
+- `monade-run check`: `memory.reinforcement`, `memory.capacity`, `memory.residue`,
+  thresholds written before the first run, each with a control that must fail. 15 checks.
+- Report: charts of categories (series side by side, values printed); glossary and
+  "what the Monade is today" updated.
 ## 0.4.2 — 2026-11-18
 
 - First world, the stars: `monade-run stars --catalog FILE` reads an HYG-like CSV

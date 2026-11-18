@@ -1,6 +1,6 @@
 [package]
 name = "monade-core"
-description = "The core of the Monade: words, point 0, specifications, sizes, addresses, the generated space. No floating point."
+description = "The core of the Monade: words, point 0, specifications, sizes, addresses, the generated space, counters per bit. No floating point."
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

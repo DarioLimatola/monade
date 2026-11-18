@@ -159,6 +159,52 @@ pub fn generate(space: &crate::space::Space, id: u64, words: usize) -> Vec<Word>
     out
 }
 
+/// Counters per bit, the slow way: votes applied one by one, bit by bit, with
+/// wide integers; after each vote every counter is clamped to ±127. A step
+/// `(v, w)` adds `w` on the 1-bits of `v` and `-w` on its 0-bits (a negative `w`
+/// subtracts). Counter `64 · i + b` belongs to bit `b` of word `i`.
+pub fn tally(words: usize, steps: &[(&[Word], i64)]) -> Vec<i64> {
+    let mut counts = vec![0i64; words * 64];
+    for (v, w) in steps {
+        for (i, word) in v.iter().enumerate() {
+            for (b, bit) in to_bools(*word).iter().enumerate() {
+                let c = &mut counts[64 * i + b];
+                *c += if *bit { *w } else { -*w };
+                *c = (*c).clamp(-127, 127);
+            }
+        }
+    }
+    counts
+}
+
+/// Reading of counters, bit by bit: set where the counter is positive.
+pub fn tally_read(counts: &[i64]) -> Vec<Word> {
+    counts
+        .chunks(64)
+        .map(|c| {
+            let mut bits = [false; 64];
+            for (b, x) in c.iter().enumerate() {
+                bits[b] = *x > 0;
+            }
+            from_bools(bits)
+        })
+        .collect()
+}
+
+/// Uncertain mask, bit by bit: set where `|counter| < threshold`.
+pub fn tally_uncertain(counts: &[i64], threshold: i64) -> Vec<Word> {
+    counts
+        .chunks(64)
+        .map(|c| {
+            let mut bits = [false; 64];
+            for (b, x) in c.iter().enumerate() {
+                bits[b] = x.abs() < threshold;
+            }
+            from_bools(bits)
+        })
+        .collect()
+}
+
 /// Hash of a state: FNV-1a over the little-endian bytes of every word.
 ///
 /// For checking that two runs reached the same state; not cryptographic.
