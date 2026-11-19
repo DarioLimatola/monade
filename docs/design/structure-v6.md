@@ -318,7 +318,7 @@ Three ladders existed and did not match:
   2. Worlds;
   3. Lessons (cards, runs, learning curves);
   4. Blackboard (8×8 grid, residue);
-  5. Map (the inside of the mind in 3D: Monadi as points, references as lines; any point drawn as a cube of its bits; certainty as colour when the tallies are shown);
+  5. Map (Sentences, and the Tree of the sky: the octal tree walked digit by digit; the inside of the mind in 3D: Monadi as points, references as lines; any point drawn as a cube of its bits; certainty as colour when the tallies are shown);
   6. Foundations (read-only).
 - **Header always visible:** state of the mind, held-out score vs baseline, budget per impulse, joules per answer, memory vs ceiling.
 - **The sky at full scale:** Gaia Sky (MPL-2.0) as an external viewer, fed with our layers.
@@ -328,7 +328,8 @@ Three ladders existed and did not match:
 - **Stars v1 (Built v0.4.2):** HYG in four 2 MB Monadi, one bit per cell, a 3D map. Known limits: grid (cell centres), two brightness levels, five colour classes.
 - **Stars v2 (step 5c):**
   - Built v0.6.4: every star an exact Morton code of 63 bits (21 octal digits, cube of 16 777 pc, cells of 0.008 pc), sorted, only the stars stored (8 bytes a star); a region is a prefix and can become a dense 2 MB Monade on demand; brightness and colour to scale; the map at any radius from 2 to 8 000 pc; the HR diagram drawn.
-  - Still to do (5c-2): Gaia as a second voice (AT-HYG, Gaia DR3 distances, in the same repository as HYG); counts and light per cell; the HR relation as the first learning test (Decided).
+  - Built v0.6.5: Gaia as a second voice (AT-HYG HYGLike, compared star by star); the HR relation as the first learning test (Decided): failed its pre-registered 60 % (69 % HYG, 62 % Gaia), control held, tallies equal the exact median (`prereg/hr-relation.md`).
+  - Still to do (5c-3): a second feature (luminosity class); counts and light per cell.
 - **The universe at full scale: postponed (Decided).** Kept possible: tiles, levels of detail, recursion of addresses. Ladder R1–R7 in `claude/monade-council-14-universe.md`. Data: measured, inferred and modelled layers, never mixed. All of Gaia ≈ 24 GB in our format.
 - **Later worlds (Proposed):** the atom (test 1); a galaxy; a brain (C. elegans).
 

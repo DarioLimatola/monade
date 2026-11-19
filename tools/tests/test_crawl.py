@@ -187,6 +187,25 @@ class Crawl(unittest.TestCase):
         self.assertEqual(sum(1 for a in lib.rows("authors.jsonl") if a["label"] == "Goethe"), 1)
         self.assertEqual(len(lib.rows("refused.jsonl")), refused + 1)  # Hume: not a person here
 
+    def test_old_library_gets_its_links(self):
+        # A library of v0.6.0: authors taken, no frontier. The next run follows their links.
+        web = FakeWeb()
+        root = self.dir / "old"
+        lib = crawl.Library(root)
+        lib.append("authors.jsonl", {"qid": "Q5879", "label": "Goethe", "died": 1832, "lang": ["de"]})
+        lib.append("edges.jsonl", {"from": "Q5879", "rel": "influenced_by", "to": "Q1394", "from_label": "Goethe", "to_label": "Spinoza"})
+        (root / "seeds.lock.json").write_text(json.dumps({"Goethe": {"qid": "Q5879"}, "Calvino": {"qid": "Q155"}}), encoding="utf-8")
+        lib.refuse({"what": "Q155", "why": "protected: died 1985"})
+        crawl.run(self.seeds, root, fetch=Fetcher(root / "cache", pause=0, opener=web), year=2026, max_depth=1)
+        self.assertEqual([a["label"] for a in lib.rows("authors.jsonl")], ["Goethe", "Kant"])  # Goethe not twice
+        self.assertIn("Q5879", {r["qid"] for r in lib.rows("linked.jsonl")})
+        keys = [(e["from"], e["rel"], e["to"]) for e in lib.rows("edges.jsonl")]
+        self.assertEqual(len(keys), len(set(keys)))  # no edge twice
+
+    def test_not_texts_are_skipped(self):
+        self.assertTrue("Opera:La coscienza di Zeno".startswith(crawl.NOT_WORKS))
+        self.assertFalse("Allgemeines Deutsches Kommersbuch:217".startswith(crawl.NOT_WORKS))
+
     def test_ceiling_on_disk_stops(self):
         root = self.dir / "b3"
         counts = crawl.run(self.seeds, root, fetch=Fetcher(root / "cache", pause=0, opener=FakeWeb()), max_gb=0, year=2026)

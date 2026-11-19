@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.5 — 2026-11-19
+
+- The first learning test on the stars (step 5c, module `hr`): the HR relation by
+  counting only (tallies of thermometer codes per colour bin), with a baseline, a
+  control with shuffled colours, and the exact median as a reference. Pre-registered
+  thresholds and results in `prereg/hr-relation.md`: FAIL against the threshold
+  (learned 69 % and 62 % of the baseline, threshold 60 %), control PASS; the tallies
+  reach the exact median, so the shortfall is colour alone, not the counters. The
+  first run exposed the recency of saturated tallies (catalog order): teachers now come
+  in a shuffled order.
+- Two voices: `stars --second CAT` compares two catalogs star by star (Hipparcos
+  number) and learns the HR relation from both; gzip catalogs are read directly (new
+  dependency `flate2`, MIT or Apache-2.0). HYG v4.1 against HYGLike v3.2 (AT-HYG, Gaia
+  DR3 distances): 107 729 stars in both; Gaia teaches better (1.08 against 1.17 mag).
+- `stars` also writes the sky as a sparse Monade on disk (`stars.sky`).
+- Specchio, room Map: a second view, **Tree of the sky**: the octal tree of all the
+  Monadi of the sky, walked digit by digit from the root (16 777 pc) to the cells
+  (0.008 pc): the 8 parts and the 64 parts below them with their stars, the dense
+  Monade each region would be, and the stars themselves once few enough.
+- Crawler: a library written by v0.6.0 now gets its links followed (`linked.jsonl`;
+  edges recorded once); pages that are not texts are skipped (`Opera:`, `Autore:`, …);
+  a work under 250 characters is an index or a list of versions, not a text; at most
+  24 works per author by default.
+
 ## 0.6.4 — 2026-11-19
 
 - Stars v2 (step 5c, first part): every star is one exact Morton code of 63 bits, an

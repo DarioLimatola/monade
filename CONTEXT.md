@@ -77,6 +77,7 @@ crates/
     src/runs.rs       run folders: runs/YYYYMMDD-HHMMSS/{run.json, results.jsonl}
     src/report.rs     `report`: one self-contained HTML page (history + latest run)
     src/stars.rs      first world: stars as exact octal addresses (sparse) + 3D map, HR
+    src/hr.rs         first learning test: the HR relation by tallies (prereg/hr-relation.md)
     src/map.rs        the Map: words, roles, bindings, sentences, memory and their
                       references as a graph (JSON) for the Specchio room Map (map.html)
     src/specchio.rs   Specchio, the interface: seven rooms served on 127.0.0.1 only;
@@ -166,8 +167,11 @@ prereg/ ladder/ properties/ worlds/ benches/   empty for now
    textbooks), secondary literature, the language-model helper (local, after D1).
 5c. ✅ (v0.6.4, first part) Stars v2: exact Morton codes (63 bits), only the stars
     stored, dense Monadi of any region on demand, map at any radius, HR diagram.
-    5c-2: Gaia as a second voice (AT-HYG), counts and light per cell, the HR relation
-    as the first learning test.
+    v0.6.5: Gaia as a second voice (AT-HYG HYGLike), the HR relation as the first
+    learning test (`prereg/hr-relation.md`: FAIL at 60 %, control PASS, tallies equal
+    the exact median: colour alone is not enough), Specchio Tree of the sky.
+    5c-3: a second feature (luminosity class), pre-registered against the exact
+    reference; counts and light per cell.
 5d. Fast and slow tallies; stochastic votes from the seed.
 6. Blackboard: 8 levels of 512 bits, voices with weights, consensus, residue,
    redundancy between voices, niche reserve.
@@ -264,3 +268,10 @@ cargo run -p monade-run -- set-spec KEY VALUE --motive M
 - **2026-11-19 · v0.6.4.** Stars v2 (5c, first part): exact sparse codes, no grid,
   rotation by time, map to 8 000 pc, HR diagram. Verified on HYG v4.1 (109 401 stars,
   largest error 0.006 pc). Next: 5c-2 (Gaia voice, HR learning test), then 5d.
+- **2026-11-19 · v0.6.5.** First learning test: HR relation by tallies. Failed its
+  pre-registered threshold honestly (69 % / 62 % of baseline against 60 %); control
+  held; tallies match the exact median. Lesson for 5d: a saturated 8-bit tally follows
+  recent votes, so sorted input biases it (first run). Gaia teaches better than HYG.
+  Tree of the sky in Specchio. Crawler: old libraries get their links, non-text pages
+  skipped. The author's first real crawl (v0.6.0): 10 authors, 39 works, 253 requests;
+  one seed resolved to the wrong person (pin `qid`).

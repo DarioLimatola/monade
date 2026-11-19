@@ -43,6 +43,12 @@ from pathlib import Path
 from . import cards, extract, store, wiki
 from .net import Fetcher, FetchError  # noqa: F401  (Fetcher is used by the CLI)
 
+#: Wikisource pages that are not texts (metadata, author, index and scan pages).
+NOT_WORKS = ("Opera:", "Autore:", "Indice:", "Pagina:", "Autor:", "Index:", "Seite:", "Author:", "Page:", "Portal:")
+#: A work with fewer characters is almost always an index or a list of versions (on
+#: the English Wikisource, "Endymion (Keats)" lists its editions), not a text.
+MIN_CHARS = 250
+
 #: Years after the author's death before the work is free in the EU (then 1 January).
 PROTECTION_YEARS = 70
 
@@ -83,7 +89,7 @@ class Library:
     def done_works(self) -> set[str]:
         """Works already taken, or already found without text (not asked again)."""
         taken = {w["work_id"] for w in self.rows("works.jsonl")}
-        empty = {r["what"] for r in self.rows("refused.jsonl") if r["why"] == "no text found"}
+        empty = {r["what"] for r in self.rows("refused.jsonl") if r["why"].startswith("no text found")}
         return taken | empty
 
     def refuse(self, row: dict) -> bool:
@@ -180,6 +186,10 @@ def crawl_work(fetch: Fetcher, lib: Library, author: str, w: dict, max_pages: in
     if n_par == 0:
         lib.refuse({"what": work_id, "title": title, "why": "no text found"})
         return None
+    if n_chars < MIN_CHARS:
+        out_path.unlink()
+        lib.refuse({"what": work_id, "title": title, "why": "no text found: only an index or a list of versions"})
+        return None
     row = {
         "work_id": work_id,
         "work_qid": w["work"],
@@ -218,6 +228,11 @@ def next_targets(lib: Library, seeds: list[dict], max_depth: int):
         q = s.get("qid") or lock.get(s["search"], {}).get("qid")
         if q is None or q not in seen:
             yield {"seed": s, "depth": 0}
+    # Authors taken before their links were followed (libraries of v0.6.0): once more.
+    linked = {r["qid"] for r in lib.rows("linked.jsonl")}
+    for a in lib.rows("authors.jsonl"):
+        if a["qid"] not in linked:
+            yield {"qid": a["qid"], "depth": a.get("depth", 0), "label": a["label"], "again": a}
     frontier = sorted(lib.rows("frontier.jsonl"), key=lambda f: f["depth"])
     queued = set()
     for f in frontier:
@@ -231,7 +246,7 @@ def run(
     seeds_path: Path,
     root: Path,
     *,
-    max_works: int = 8,
+    max_works: int = 24,
     max_pages: int = 200,
     minutes: float = 30,
     max_depth: int = 3,
@@ -256,7 +271,14 @@ def run(
     if mirrors:
         lib.log("local mirror of Wikisource for " + ", ".join(sorted(mirrors)) + ": chapters read from the dump")
     lib.log(f"crawl start: max {max_works} works per author, links up to depth {max_depth}, {minutes} minutes, {max_gb} GB")
-    tried: set[str] = set()  # targets attempted in this run (a network error is retried next run)
+    tried: set[str] = set()
+    edge_keys = {(e["from"], e["rel"], e["to"]) for e in lib.rows("edges.jsonl")}
+
+    def edge(row: dict) -> None:
+        key = (row["from"], row["rel"], row["to"])
+        if key not in edge_keys:
+            edge_keys.add(key)
+            lib.append("edges.jsonl", row)  # targets attempted in this run (a network error is retried next run)
 
     def key(t: dict) -> str:
         return t["seed"]["search"] if "seed" in t else t["qid"]
@@ -305,13 +327,17 @@ def run(
             why = f"protected: died {person['died']}" if person["died"] else "no death date: may be alive"
         elif not langs:
             why = "did not write in it, de or en"
+        again = target.get("again")
+        if again:
+            why, langs = None, again["lang"]
         if why:
             if lib.refuse({"what": qid, "label": label, "why": why}):
                 counts["refused"] += 1
             lib.log(f"{label} ({qid}): refused, {why}")
             continue
-        lib.append("authors.jsonl", {"qid": qid, "label": label, "died": person["died"], "lang": langs, "depth": depth})
-        counts["authors"] += 1
+        if not again:
+            lib.append("authors.jsonl", {"qid": qid, "label": label, "died": person["died"], "lang": langs, "depth": depth})
+            counts["authors"] += 1
         # Links: who influenced this author, and whom it influenced -> the frontier.
         links = [(q, l, "influenced_by") for q, l in person["influences"]]
         try:
@@ -320,16 +346,17 @@ def run(
         except FetchError as e:
             lib.log(f"{label}: influenced not listed this time ({e})")
         for q, l, rel in links[: 2 * max_links]:
-            lib.append("edges.jsonl", {"from": qid, "rel": rel, "to": q, "from_label": label, "to_label": l})
+            edge({"from": qid, "rel": rel, "to": q, "from_label": label, "to_label": l})
             if q not in in_frontier:  # recorded even beyond the depth limit: a later run may go deeper
                 lib.append("frontier.jsonl", {"qid": q, "label": l, "depth": depth + 1, "via": qid, "rel": rel})
                 in_frontier.add(q)
+        lib.append("linked.jsonl", {"qid": qid})
         try:
             works = wiki.parse_works(fetch.get_json(wiki.sparql_url(wiki.works_query(qid, langs))))
         except FetchError as e:
             lib.log(f"{label}: works not listed this time ({e})")
             continue
-        works = [w for w in works if w["lang"] in langs][:max_works]
+        works = [w for w in works if w["lang"] in langs and not w["title"].startswith(NOT_WORKS)][:max_works]
         lib.log(f"{label} ({qid}, died {person['died']}, depth {depth}): {len(works)} works on Wikisource")
         for w in works:
             if budget.over() or library_bytes(lib) >= max_bytes:
@@ -345,7 +372,7 @@ def run(
             if row:
                 done.add(work_id)
                 counts["works"] += 1
-                lib.append("edges.jsonl", {"from": qid, "rel": "wrote", "to": w["work"], "from_label": label, "to_label": w["label"]})
+                edge({"from": qid, "rel": "wrote", "to": w["work"], "from_label": label, "to_label": w["label"]})
                 lib.log(f"  {w['title']} [{w['lang']}]: {row['paragraphs']} paragraphs, {row['chars']} characters")
             else:
                 counts["refused"] += 1

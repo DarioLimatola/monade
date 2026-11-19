@@ -245,7 +245,7 @@ wheels = [
 
 [[package]]
 name = "monade-tools"
-version = "0.6.2"
+version = "0.6.5"
 source = { editable = "." }
 dependencies = [
     { name = "blake3" },

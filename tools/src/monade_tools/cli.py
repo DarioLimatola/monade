@@ -5,7 +5,7 @@
                           --languages it,en --dir FOLDER [--description D]
                           [--non-commercial] [--notes T]
     monade-tools card check CARD.json
-    monade-tools crawl run [--max-works 8] [--minutes 30] [--depth 3] [--max-gb 64]
+    monade-tools crawl run [--max-works 24] [--minutes 30] [--depth 3] [--max-gb 64]
     monade-tools crawl status [--names]
     monade-tools dump get --lang it|de|en|all     download the Wikisource dump (resumable)
     monade-tools dump build --lang it|de|en|all   turn it into the local mirror read by the crawler
@@ -270,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     cr = sub.add_parser("crawl", help="the crawler: authors and texts").add_subparsers(dest="action", required=True)
     run = cr.add_parser("run", help="read the seed authors from Wikidata and Wikisource")
     run.add_argument("--seeds", default="", help="default: <data>/biblioteca/seeds.toml")
-    run.add_argument("--max-works", type=int, default=8)
+    run.add_argument("--max-works", type=int, default=24)
     run.add_argument("--max-pages", type=int, default=200)
     run.add_argument("--minutes", type=float, default=30)
     run.add_argument("--depth", type=int, default=3, help="how far to follow the links from the start")

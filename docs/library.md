@@ -62,7 +62,11 @@ their robots.txt allows it. Project Gutenberg forbids automated access to its we
 - Only Wikisource pages in the author's own languages (`lang` in the seeds): no
   translations.
 - An author reached by a link is taken only if it wrote in it, de or en.
-- At most `--max-works` works per author (default 8) and `--max-pages` chapters per
+- Pages that are not texts are skipped (`Opera:`, `Autore:`, `Author:`, …); a work
+  under 250 characters is an index or a list of versions and is refused.
+- A library written before links were followed gets them on the next run (authors
+  without a row in `linked.jsonl`).
+- At most `--max-works` works per author (default 24) and `--max-pages` chapters per
   work (default 200); a time budget (`--minutes`, default 30); a ceiling on the texts on
   disk (`--max-gb`, default 64): at the ceiling the crawl stops.
 

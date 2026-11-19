@@ -182,6 +182,14 @@ pub fn respond(path: &str, ctx: &Ctx, now: &str) -> Reply {
     let path = path.split(['?', '#']).next().unwrap_or("/");
     match path {
         "/map" => reply(200, HTML, crate::map::page()),
+        "/tree" => reply(200, HTML, crate::map::tree_page()),
+        "/api/tree" => match crate::stars::Sky::load(&ctx.stars.with_extension("sky")) {
+            Ok(sky) => {
+                let a = crate::map::query(full, "a").unwrap_or_default();
+                reply(200, "application/json", crate::map::tree(&sky, &a).to_string())
+            }
+            Err(_) => reply(200, "application/json", "{\"missing\":true}".into()),
+        },
         "/api/map" => {
             let text = crate::map::query(full, "s").unwrap_or_else(|| crate::map::DEFAULT.to_string());
             let space = crate::store::load_specs(&ctx.dir)

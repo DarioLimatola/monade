@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod check;
+mod hr;
 mod map;
 mod report;
 mod runs;
@@ -29,7 +30,7 @@ USAGE
   monade-run show
   monade-run check  [--runs R]
   monade-run report [--runs R] [--out F]
-  monade-run stars  --catalog C [--out F]
+  monade-run stars  --catalog C [--second C2] [--out F]
   monade-run specchio [--port P] [--runs R] [--open no]
   monade-run tools ARGS...
   monade-run append-foundation --name N --text T --motive M [--state active|suspended] [--amends ID]
@@ -39,7 +40,9 @@ USAGE
   check    verifies the Monade, says what it verified, saves the run in R
   report   writes one HTML page (F) from every run in R; open it in a browser
   stars    turns the stars of a catalog (HYG CSV) into octal addresses (exact, only
-           the stars stored) and writes a 3D map (F, default stars.html)
+           the stars stored), writes a 3D map (F, default stars.html) and the
+           sky (stars.sky), and learns the HR relation; with --second, a second
+           catalog (e.g. AT-HYG, Gaia distances) is compared as a second voice
   specchio the interface: serves it on this computer only (127.0.0.1, port P,
            default 8088) and opens the browser; Ctrl+C stops it
   tools    runs the Python tools with uv: `tools doctor`, `tools card new ...`
@@ -216,7 +219,7 @@ fn run(args: &[String], now: &str) -> Result<String, CliError> {
             report_command(&a, now)
         }
         "stars" => {
-            a.only(&["catalog", "out"], 0)?;
+            a.only(&["catalog", "second", "out"], 0)?;
             stars_command(&a)
         }
         "specchio" => {
@@ -397,21 +400,51 @@ fn stars_command(a: &Args) -> Result<String, CliError> {
     let catalog = PathBuf::from(a.required("catalog")?);
     let list = stars::read_catalog(&catalog).map_err(|e| CliError::Usage(e.to_string()))?;
     let sky = stars::Sky::build(&list);
-    let source = catalog
-        .file_name()
-        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let name = |p: &PathBuf| {
+        p.file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+    };
+    let source = name(&catalog);
     let page = stars::html(
         &list,
         &sky,
         &format!("{source} (HYG Database, astronexus.com, CC BY-SA 4.0)"),
     );
     let out = PathBuf::from(a.flag("out").unwrap_or("stars.html"));
-    std::fs::write(&out, page).map_err(|e| CliError::Store(StoreError::Io(out.clone(), e)))?;
-    Ok(format!(
-        "{}\nmap written to {}\nopen it in a browser (double click)\n",
+    let io = |p: &PathBuf, e| CliError::Store(StoreError::Io(p.clone(), e));
+    std::fs::write(&out, page).map_err(|e| io(&out, e))?;
+    let sky_path = out.with_extension("sky");
+    sky.save(&sky_path).map_err(|e| io(&sky_path, e))?;
+    let mut text = format!(
+        "{}\nmap written to {} (open it in a browser), sky to {} (read by Specchio, room Map)\n\n",
         stars::summary(&list, &sky),
-        out.display()
-    ))
+        out.display(),
+        sky_path.display()
+    );
+    if let Some(hr) = hr::learn(&list) {
+        text.push_str(&hr::summary(&source, &hr));
+    }
+    if let Some(second) = a.flag("second") {
+        let second = PathBuf::from(second);
+        let other = stars::read_catalog(&second).map_err(|e| CliError::Usage(e.to_string()))?;
+        let g = stars::agree(&list, &other);
+        let _ = writeln!(
+            text,
+            "\nTwo voices: {} and {}: {} stars in both (by Hipparcos number); the two places of a star \
+             differ by {} (median), {} (90%); distances from the Sun differ by more than 10% for {}.{}% of them",
+            source,
+            name(&second),
+            g.matched,
+            stars::pc(g.median),
+            stars::pc(g.p90),
+            g.far_permille / 10,
+            g.far_permille % 10
+        );
+        if let Some(hr) = hr::learn(&other) {
+            text.push_str(&hr::summary(&name(&second), &hr));
+        }
+    }
+    Ok(text)
 }
 
 fn specchio_command(a: &Args) -> Result<String, CliError> {

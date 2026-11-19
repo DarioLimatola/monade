@@ -238,6 +238,82 @@ pub fn page() -> String {
 
 const PAGE: &str = include_str!("map.html");
 
+/// The page of the tree of the sky.
+pub fn tree_page() -> String {
+    TREE_PAGE.to_string()
+}
+
+const TREE_PAGE: &str = include_str!("tree.html");
+
+/// At most this many stars are sent to draw a region.
+pub const MAX_STARS: usize = 6000;
+
+/// One region of the sky's tree as JSON: its octal address (the digits from the root),
+/// size, stars, the stars of its 8 children and 64 grandchildren, the dense Monade it
+/// would be (8 more digits, 2 MB), and, if few enough, its stars (place inside the
+/// region in 1/65 536 of its side, and the colour bits).
+pub fn tree(sky: &crate::stars::Sky, address: &str) -> Value {
+    use crate::stars::{deinterleave, side_milli, DEPTH};
+    let digits: Vec<u64> = address
+        .chars()
+        .filter_map(|c| c.to_digit(8))
+        .map(u64::from)
+        .take(DEPTH as usize)
+        .collect();
+    let depth = digits.len() as u32;
+    let prefix = digits.iter().fold(0u64, |p, d| p << 3 | d);
+    let range = sky.region(prefix, depth);
+    let children = sky.children(prefix, depth);
+    let grand: Vec<u64> = (0..8u64)
+        .flat_map(|c| sky.children(prefix << 3 | c, depth + 1))
+        .collect();
+    let dense = (depth + 8 <= DEPTH).then(|| word::popcount(&sky.dense(prefix, depth)));
+    let rest = DEPTH - depth; // digits below this region
+    let stars: Vec<Value> = if range.len() <= MAX_STARS {
+        range
+            .clone()
+            .map(|i| {
+                let (x, y, z) = deinterleave(sky.codes[i] & ((1u64 << (3 * rest)) - 1));
+                let scale = |v: u64| {
+                    if rest >= 16 {
+                        v >> (rest - 16)
+                    } else {
+                        v << (16 - rest)
+                    }
+                };
+                json!([scale(x), scale(y), scale(z), sky.info[i] & 511])
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let names: Vec<Value> = sky
+        .names
+        .iter()
+        .filter(|(i, _)| range.contains(i))
+        .take(64)
+        .map(|(i, n)| {
+            let (x, y, z) = deinterleave(sky.codes[*i] & ((1u64 << (3 * rest)) - 1));
+            let scale = |v: u64| {
+                if rest >= 16 {
+                    v >> (rest - 16)
+                } else {
+                    v << (16 - rest)
+                }
+            };
+            json!([n, scale(x), scale(y), scale(z)])
+        })
+        .collect();
+    json!({
+        "address": digits.iter().map(|d| char::from(b'0' + *d as u8)).collect::<String>(),
+        "depth": depth, "max_depth": DEPTH,
+        "side": crate::stars::pc(side_milli(depth)),
+        "stars": range.len(), "children": children, "grand": grand,
+        "dense_cell": (depth + 8 <= DEPTH).then(|| crate::stars::pc(side_milli(depth + 8))),
+        "dense_lit": dense, "points": stars, "names": names, "total": sky.codes.len(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +392,47 @@ mod tests {
                 .len(),
             0
         );
+    }
+
+    #[test]
+    fn the_tree_of_a_sky() {
+        use crate::stars::{Sky, Star};
+        let star = |x: i64| Star {
+            pos: [x, 1, 1],
+            mag: None,
+            absmag: None,
+            ci: Some(600),
+            name: "s".into(),
+            hip: None,
+        };
+        let sky = Sky::build(&[star(1_000), star(-1_000), star(2_000_000)]);
+        let root = tree(&sky, "");
+        assert_eq!(root["stars"], 3);
+        assert_eq!(
+            root["children"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap())
+                .sum::<u64>(),
+            3
+        );
+        assert_eq!(root["grand"].as_array().unwrap().len(), 64);
+        assert_eq!(root["points"].as_array().unwrap().len(), 3);
+        // Going down the digits of a star's address keeps it in sight.
+        let code = sky.codes[0];
+        let addr: String = (0..21)
+            .rev()
+            .map(|i| char::from(b'0' + (code >> (3 * i) & 7) as u8))
+            .collect();
+        for d in [1, 5, 13, 21] {
+            assert!(
+                tree(&sky, &addr[..d])["stars"].as_u64().unwrap() >= 1,
+                "depth {d}"
+            );
+        }
+        assert!(tree(&sky, &addr)["dense_lit"].is_null());
+        assert_eq!(tree(&sky, "9x")["depth"], 0, "not octal digits: ignored");
     }
 
     #[test]

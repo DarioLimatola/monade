@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tree · Monade</title>
+<style>
+:root{--bg:#121212;--fg:#e6e6e6;--mute:#8a8a8a;--line:#2a2a2a}
+@media (prefers-color-scheme: light){:root{--bg:#fafafa;--fg:#1a1a1a;--mute:#6b6b6b;--line:#dddddd}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 system-ui,'Segoe UI',sans-serif;display:grid;grid-template-columns:1fr 320px;height:100vh}
+#view{position:relative;min-width:0;background:#000}
+canvas#c{width:100%;height:100%;display:block;cursor:pointer}
+aside{border-left:1px solid var(--line);padding:16px;overflow:auto}
+h2{font-size:13px;font-weight:600;margin:0 0 8px;color:var(--mute);text-transform:uppercase;letter-spacing:.08em}
+a{color:inherit}
+.meta{color:var(--mute)} .mono{font-family:ui-monospace,Consolas,monospace}
+.crumbs button{margin:2px 2px 2px 0;padding:2px 6px;background:transparent;color:var(--fg);border:1px solid var(--line);border-radius:3px;cursor:pointer;font:12px ui-monospace,Consolas,monospace}
+table{border-collapse:collapse} td{padding:2px 8px 2px 0;border-bottom:1px solid var(--line)}
+#hud{position:absolute;left:12px;bottom:8px;color:#888;pointer-events:none}
+</style></head><body>
+<div id="view"><canvas id="c"></canvas><div id="hud"></div></div>
+<aside>
+<p class="meta"><a href="/map">Sentences</a> · <b>Tree of the sky</b></p>
+<h2>The tree of all the Monadi</h2>
+<p class="meta">Every Monade has an octal address in one tree: each digit picks one of 8 parts (bit 0 → x, bit 1 → y, bit 2 → z). A word of 64 bits is 2 digits deep, a block of 512 bits 3, a Monade of 2 MB 8. The sky is a tree of 21 digits, from the cube of 16 777 pc down to cells of 0.008 pc, and only the branches that hold stars exist. Click one of the 8 parts to go down; the buttons go back up.</p>
+<div class="crumbs" id="crumbs"></div>
+<div id="info"></div>
+<p class="meta">Brightness of a part: how many stars it holds (logarithmic). The small squares are the 64 parts of the next level.</p>
+</aside>
+<script>
+const cv=document.getElementById('c'),g=cv.getContext('2d');
+let T=null,addr='',yaw=0.7,pitch=0.4,drag=null,moved=false,last=performance.now();
+const CT=[[-.4,155,176,255],[0,202,215,255],[.3,248,247,255],[.6,255,244,234],[1.0,255,218,181],[1.4,255,196,140],[2.0,255,170,90]];
+function col(ci){if(ci===511)return'rgb(150,150,150)';const bv=ci/100-.5;let c=CT[CT.length-1];
+  for(let j=1;j<CT.length;j++)if(bv<=CT[j][0]){const a=CT[j-1],b=CT[j],t=Math.max(0,(bv-a[0])/(b[0]-a[0]));c=[0,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t,a[3]+(b[3]-a[3])*t];break;}
+  return 'rgb('+(c[1]|0)+','+(c[2]|0)+','+(c[3]|0)+')';}
+function load(a){fetch('/api/tree?a='+a).then(r=>r.json()).then(t=>{
+  if(t.missing){document.getElementById('info').innerHTML='<p>No sky yet: run <span class="mono">cargo run --release -p monade-run -- stars --catalog hygdata_v41.csv</span> in the folder where Specchio starts, then reload.</p>';return;}
+  T=t;addr=t.address;panel();draw();});}
+function panel(){
+  let c='<button data-a="">root</button>';for(let i=1;i<=addr.length;i++)c+='<button data-a="'+addr.slice(0,i)+'">'+addr[i-1]+'</button>';
+  document.getElementById('crumbs').innerHTML=c;
+  document.querySelectorAll('#crumbs button').forEach(b=>b.onclick=()=>load(b.dataset.a));
+  const rows=T.children.map((n,o)=>'<tr><td class="mono">'+(addr+o)+'</td><td>'+n.toLocaleString()+' stars</td></tr>').join('');
+  document.getElementById('info').innerHTML='<p><span class="mono">'+(addr||'(root)')+'</span><br>depth '+T.depth+' of '+T.max_depth+' · side '+T.side+'<br><b>'+T.stars.toLocaleString()+'</b> of '+T.total.toLocaleString()+' stars'+
+   (T.dense_lit!==null?'<br>as a dense Monade of 2 MB (cells of '+T.dense_cell+'): '+T.dense_lit.toLocaleString()+' cells lit':'<br>the deepest level: one cell')+'</p><table>'+rows+'</table>';
+}
+function proj(x,y,z,w,h){x-=.5;y-=.5;z-=.5;const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
+  const x1=cy*x-sy*y,y1=sy*x+cy*y,y2=cp*y1-sp*z,z2=sp*y1+cp*z,d=(2.6+y2)/2.6,s=Math.min(w,h)*.55;return[w/2+s*x1/d,h/2-s*z2/d,d];}
+function box(x0,y0,z0,s,w,h,style,width){const P=[];for(let i=0;i<8;i++)P.push(proj(x0+(i&1)*s,y0+(i>>1&1)*s,z0+(i>>2&1)*s,w,h));
+  g.strokeStyle=style;g.lineWidth=width;g.beginPath();
+  [[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]].forEach(([a,b])=>{g.moveTo(P[a][0],P[a][1]);g.lineTo(P[b][0],P[b][1]);});g.stroke();}
+function draw(){
+  const w=cv.width=cv.clientWidth*devicePixelRatio,h=cv.height=cv.clientHeight*devicePixelRatio;g.clearRect(0,0,w,h);if(!T)return;
+  const mx=Math.max(1,...T.grand),lg=n=>n?Math.log(1+n)/Math.log(1+mx):0;
+  // the 64 grandchildren: squares, brighter with more stars
+  T.grand.forEach((n,k)=>{if(!n)return;const c=k>>3,o=k&7,x=(c&1)*.5+(o&1)*.25+.125,y=(c>>1&1)*.5+(o>>1&1)*.25+.125,z=(c>>2&1)*.5+(o>>2&1)*.25+.125;
+    const p=proj(x,y,z,w,h),s=Math.min(w,h)*.55*.25/p[2]*.8;g.fillStyle='rgba(86,180,233,'+(0.06+0.5*lg(n))+')';g.fillRect(p[0]-s/2,p[1]-s/2,s,s);});
+  box(0,0,0,1,w,h,'rgba(200,200,200,.5)',1.5*devicePixelRatio);
+  T.children.forEach((n,o)=>{if(!n)return;box((o&1)*.5,(o>>1&1)*.5,(o>>2&1)*.5,.5,w,h,'rgba(230,159,0,'+(0.25+0.6*Math.log(1+n)/Math.log(1+Math.max(...T.children)))+')',devicePixelRatio);
+    const p=proj((o&1)*.5+.25,(o>>1&1)*.5+.25,(o>>2&1)*.5+.25,w,h);g.fillStyle='#e6e6e6';g.font=(12*devicePixelRatio)+'px ui-monospace,Consolas,monospace';g.fillText(o+' · '+n.toLocaleString(),p[0]-20,p[1]);});
+  T.points.forEach(q=>{const p=proj(q[0]/65536,q[1]/65536,q[2]/65536,w,h);g.fillStyle=col(q[3]);g.fillRect(p[0]-1,p[1]-1,2*devicePixelRatio,2*devicePixelRatio);});
+  g.fillStyle='#bbb';g.font=(11*devicePixelRatio)+'px system-ui';T.names.forEach(n=>{const p=proj(n[1]/65536,n[2]/65536,n[3]/65536,w,h);g.fillText(n[0],p[0]+4,p[1]-4);});
+  document.getElementById('hud').textContent=(T.points.length?T.points.length.toLocaleString()+' stars drawn':'too many stars to draw: go down')+' · drag to turn';
+}
+function pick(e){if(!T)return;const r=cv.getBoundingClientRect(),mx=(e.clientX-r.left)*devicePixelRatio,my=(e.clientY-r.top)*devicePixelRatio,w=cv.width,h=cv.height;
+  let best=-1,bd=1e18;T.children.forEach((n,o)=>{if(!n)return;const p=proj((o&1)*.5+.25,(o>>1&1)*.5+.25,(o>>2&1)*.5+.25,w,h),d=(p[0]-mx)**2+(p[1]-my)**2;if(d<bd){bd=d;best=o;}});
+  if(best>=0&&T.depth<T.max_depth)load(addr+best);}
+cv.addEventListener('mousedown',e=>{drag=[e.clientX,e.clientY];moved=false;});
+addEventListener('mouseup',e=>{if(drag&&!moved)pick(e);drag=null;});
+addEventListener('mousemove',e=>{if(!drag)return;const dx=e.clientX-drag[0],dy=e.clientY-drag[1];if(Math.abs(dx)+Math.abs(dy)>3)moved=true;
+  yaw+=dx*.008;pitch=Math.max(-1.5,Math.min(1.5,pitch+dy*.008));drag=[e.clientX,e.clientY];draw();});
+function tick(t){const dt=Math.min(.1,(t-last)/1000);last=t;if(!drag){yaw+=dt*.1;draw();}requestAnimationFrame(tick);}
+addEventListener('resize',draw);load('');requestAnimationFrame(tick);
+</script></body></html>

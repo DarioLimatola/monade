@@ -44,6 +44,8 @@ pub struct Star {
     pub ci: Option<i64>,
     /// Proper name, if any.
     pub name: String,
+    /// Hipparcos number, if any: the same star in two catalogs.
+    pub hip: Option<u32>,
 }
 
 /// Errors of the stars world.
@@ -87,17 +89,26 @@ pub fn parse_milli(s: &str) -> Option<i64> {
     Some(if neg { -v } else { v })
 }
 
-/// Reads the stars of an HYG-like CSV (columns x, y, z, mag, ci, proper; absmag if
-/// present). Stars at the catalog's "unknown distance" are left out.
+/// Reads the stars of an HYG-like CSV, plain or gzip-compressed (`.gz`): columns x, y,
+/// z, mag, ci, proper; absmag and hip if present. HYG and the HYGLike subset of AT-HYG
+/// (Gaia DR3 distances) have the same columns. Stars at the catalog's "unknown
+/// distance" are left out.
 pub fn read_catalog(path: &Path) -> Result<Vec<Star>, StarsError> {
     let err = |e: String| StarsError::Read(path.to_path_buf(), e);
-    let mut r = csv::Reader::from_path(path).map_err(|e| err(e.to_string()))?;
+    let file = std::fs::File::open(path).map_err(|e| err(e.to_string()))?;
+    let input: Box<dyn std::io::Read> = if path.extension().is_some_and(|e| e == "gz") {
+        Box::new(flate2::read::GzDecoder::new(std::io::BufReader::new(file)))
+    } else {
+        Box::new(std::io::BufReader::new(file))
+    };
+    let mut r = csv::Reader::from_reader(input);
     let headers = r.headers().map_err(|e| err(e.to_string()))?.clone();
     let find = |name: &str| headers.iter().position(|h| h == name);
     let col = |name: &'static str| find(name).ok_or(StarsError::Column(name));
     let (x, y, z) = (col("x")?, col("y")?, col("z")?);
     let (mag, ci, proper) = (col("mag")?, col("ci")?, col("proper")?);
     let absmag = find("absmag");
+    let hip = find("hip");
     let mut out = Vec::new();
     for rec in r.records() {
         let rec = rec.map_err(|e| err(e.to_string()))?;
@@ -118,6 +129,7 @@ pub fn read_catalog(path: &Path) -> Result<Vec<Star>, StarsError> {
             absmag: absmag.and_then(|i| parse_milli(get(i))),
             ci: parse_milli(get(ci)),
             name: get(proper).to_string(),
+            hip: hip.and_then(|i| get(i).trim().parse().ok()),
         });
     }
     Ok(out)
@@ -286,8 +298,135 @@ impl Sky {
     }
 }
 
+/// The agreement of two catalogs (two voices) on the stars they share, matched by
+/// Hipparcos number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Agreement {
+    /// Stars found in both.
+    pub matched: u64,
+    /// Median distance between the two places of a star, thousandths of a parsec.
+    pub median: u64,
+    /// 90th percentile of that distance.
+    pub p90: u64,
+    /// Stars whose distances from the Sun differ by more than 10 %, per mille.
+    pub far_permille: u64,
+}
+
+/// Compares the places of the stars that `a` and `b` share.
+pub fn agree(a: &[Star], b: &[Star]) -> Agreement {
+    let other: std::collections::HashMap<u32, [i64; 3]> =
+        b.iter().filter_map(|s| Some((s.hip?, s.pos))).collect();
+    let mut gaps = Vec::new();
+    let mut far = 0u64;
+    for s in a {
+        let Some(p) = s.hip.and_then(|h| other.get(&h)) else {
+            continue;
+        };
+        let sq = |v: [i64; 3]| v.iter().map(|x| x.unsigned_abs().pow(2)).sum::<u64>();
+        gaps.push(isqrt(sq([
+            s.pos[0] - p[0],
+            s.pos[1] - p[1],
+            s.pos[2] - p[2],
+        ])));
+        let (ra, rb) = (isqrt(sq(s.pos)), isqrt(sq(*p)));
+        if ra.abs_diff(rb) * 10 > rb {
+            far += 1;
+        }
+    }
+    gaps.sort_unstable();
+    let at = |q: usize| {
+        gaps.get(gaps.len().saturating_sub(1) * q / 100)
+            .copied()
+            .unwrap_or(0)
+    };
+    Agreement {
+        matched: gaps.len() as u64,
+        median: at(50),
+        p90: at(90),
+        far_permille: if gaps.is_empty() {
+            0
+        } else {
+            far * 1000 / gaps.len() as u64
+        },
+    }
+}
+
+/// The first bytes of a sky file.
+const MAGIC: &[u8; 8] = b"MONSKY01";
+
+impl Sky {
+    /// Writes the sky (the sparse Monade): MAGIC, count, codes, info (little-endian),
+    /// then one line per name: index, tab, name.
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        let mut out = Vec::with_capacity(16 + 12 * self.codes.len());
+        out.extend_from_slice(MAGIC);
+        out.extend_from_slice(&(self.codes.len() as u64).to_le_bytes());
+        self.codes
+            .iter()
+            .for_each(|c| out.extend_from_slice(&c.to_le_bytes()));
+        self.info
+            .iter()
+            .for_each(|i| out.extend_from_slice(&i.to_le_bytes()));
+        for (i, n) in &self.names {
+            out.extend_from_slice(format!("{i}\t{}\n", n.replace(['\t', '\n'], " ")).as_bytes());
+        }
+        std::fs::write(path, out)
+    }
+
+    /// Reads a sky written by [`Sky::save`].
+    pub fn load(path: &Path) -> std::io::Result<Sky> {
+        let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "not a sky file");
+        let b = std::fs::read(path)?;
+        if b.len() < 16 || &b[..8] != MAGIC {
+            return Err(bad());
+        }
+        let n = u64::from_le_bytes(b[8..16].try_into().map_err(|_| bad())?) as usize;
+        let end = n
+            .checked_mul(12)
+            .and_then(|x| x.checked_add(16))
+            .ok_or_else(bad)?;
+        if b.len() < end {
+            return Err(bad());
+        }
+        let codes = b[16..16 + 8 * n]
+            .chunks_exact(8)
+            .map(|c| u64::from_le_bytes(c.try_into().unwrap_or([0; 8])))
+            .collect();
+        let info = b[16 + 8 * n..end]
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes(c.try_into().unwrap_or([0; 4])))
+            .collect();
+        let names = String::from_utf8_lossy(&b[end..])
+            .lines()
+            .filter_map(|l| {
+                let (i, n) = l.split_once('\t')?;
+                Some((i.parse().ok()?, n.to_string()))
+            })
+            .collect();
+        Ok(Sky {
+            codes,
+            info,
+            names,
+            outside: 0,
+            shared: 0,
+            error_max: 0,
+        })
+    }
+
+    /// The 8 children of a region: for each octant, the number of stars.
+    pub fn children(&self, prefix: u64, depth: u32) -> [u64; 8] {
+        let mut out = [0; 8];
+        if depth < DEPTH {
+            for (o, n) in out.iter_mut().enumerate() {
+                *n = self.region(prefix << 3 | o as u64, depth + 1).len() as u64;
+            }
+        }
+        out
+    }
+}
+
 /// Thousandths of a parsec as text: 1234 → "1.234 pc".
-fn pc(milli: u64) -> String {
+pub(crate) fn pc(milli: u64) -> String {
     format!("{}.{:03} pc", milli / 1000, milli % 1000)
 }
 
@@ -439,6 +578,7 @@ mod tests {
             absmag: None,
             ci: Some(ci),
             name: name.into(),
+            hip: None,
         };
         let stars = [
             star([1_000, 1_000, 1_000], 1000, 600, "a"),
@@ -475,6 +615,39 @@ mod tests {
         let page = html(&stars, &sky, "test");
         assert!(page.contains("<canvas") && page.contains("\"a\""));
         assert!(summary(&stars, &sky).contains("5 stars read"));
+    }
+
+    #[test]
+    fn two_voices_and_the_sky_file() {
+        let star = |x: i64, hip| Star {
+            pos: [x, 0, 0],
+            mag: None,
+            absmag: None,
+            ci: None,
+            name: "n".into(),
+            hip,
+        };
+        let a = [star(10_000, Some(1)), star(20_000, Some(2)), star(5, None)];
+        let b = [
+            star(10_500, Some(1)),
+            star(30_000, Some(2)),
+            star(7, Some(9)),
+        ];
+        let g = agree(&a, &b);
+        assert_eq!((g.matched, g.median, g.p90), (2, 500, 500));
+        assert_eq!(g.far_permille, 500, "star 2: 20 against 30 pc");
+        let sky = Sky::build(&a);
+        let p = std::env::temp_dir().join(format!("monade-sky-{}.sky", std::process::id()));
+        sky.save(&p).unwrap();
+        let back = Sky::load(&p).unwrap();
+        assert_eq!(
+            (back.codes, back.info, back.names),
+            (sky.codes.clone(), sky.info.clone(), sky.names.clone())
+        );
+        std::fs::write(&p, b"nonsense").unwrap();
+        assert!(Sky::load(&p).is_err());
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(sky.children(0, 0).iter().sum::<u64>(), 3);
     }
 
     #[test]
