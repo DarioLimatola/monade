@@ -5,6 +5,8 @@
                           --languages it,en --dir FOLDER [--description D]
                           [--non-commercial] [--notes T]
     monade-tools card check CARD.json
+    monade-tools crawl run [--seeds tools/seeds.toml] [--max-works 8] [--minutes 30]
+    monade-tools crawl status
 """
 
 from __future__ import annotations
@@ -17,7 +19,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__, cards
+import time
+
+from . import __version__, cards, crawl
 
 
 def data_dir() -> Path:
@@ -104,6 +108,36 @@ def card_check(a: argparse.Namespace) -> int:
     return 1 if found else 0
 
 
+def library_dir() -> Path:
+    """Where the crawler writes: <data folder>/biblioteca."""
+    return data_dir() / "biblioteca"
+
+
+def crawl_run(a: argparse.Namespace) -> int:
+    root = library_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    lock = root / "crawl.lock"
+    # One crawl at a time; a lock older than 12 hours is left by a crash.
+    if lock.is_file() and time.time() - lock.stat().st_mtime < 12 * 3600 and not a.force:
+        print(f"a crawl is already running (since {lock.read_text(encoding='utf-8').strip()}); --force to ignore")
+        return 1
+    lock.write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+    try:
+        crawl.run(
+            Path(a.seeds),
+            root,
+            max_works=a.max_works,
+            max_pages=a.max_pages,
+            minutes=a.minutes,
+            fetch=crawl.Fetcher(root / "cache", offline=a.offline),
+        )
+    except KeyboardInterrupt:
+        print("stopped: the next run continues from here")
+    finally:
+        lock.unlink(missing_ok=True)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="monade-tools", description="Tools of the Monade.")
     sub = p.add_subparsers(dest="command", required=True)
@@ -122,9 +156,23 @@ def main(argv: list[str] | None = None) -> int:
     new.add_argument("--notes", default="")
     chk = card.add_parser("check", help="check a card and its files")
     chk.add_argument("card")
+    cr = sub.add_parser("crawl", help="the crawler: authors and texts").add_subparsers(dest="action", required=True)
+    run = cr.add_parser("run", help="read the seed authors from Wikidata and Wikisource")
+    run.add_argument("--seeds", default=str(Path(__file__).resolve().parents[2] / "seeds.toml"))
+    run.add_argument("--max-works", type=int, default=8)
+    run.add_argument("--max-pages", type=int, default=200)
+    run.add_argument("--minutes", type=float, default=30)
+    run.add_argument("--offline", action="store_true", help="only what is already in the cache")
+    run.add_argument("--force", action="store_true", help="ignore the lock of another crawl")
+    cr.add_parser("status", help="what the library holds")
     a = p.parse_args(argv)
     if a.command == "doctor":
         return doctor()
+    if a.command == "crawl":
+        if a.action == "run":
+            return crawl_run(a)
+        print(crawl.status(library_dir()))
+        return 0
     if a.action == "new":
         return card_new(a)
     return card_check(a)

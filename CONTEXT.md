@@ -81,7 +81,8 @@ crates/
                       Commands runs a fixed list (check, doctor, show, stars)
   xtask/              `cargo all`: every check
 tools/                Python tools with uv (outside the mind): `monade-tools doctor`,
-                      dataset cards (`card new`, `card check`); tests in tools/tests
+                      dataset cards (`card new`, `card check`), the crawler
+                      (`crawl run | status`, seeds in tools/seeds.toml); tests in tools/tests
 fuzz/                 cargo-fuzz target for the log readers (Linux, nightly)
 runs/                 results of `check` (one folder per run, never overwritten; not in git)
 docs/                 design copied from the project (structure v6, parliament), data cards
@@ -154,8 +155,11 @@ prereg/ ladder/ properties/ worlds/ benches/   empty for now
    `memory.residue` (test 19, first part).
 5b. ✅ (v0.5.1) Weights 1/2/4/8; tally golden hash; `memory.capacity_noisy`;
    housekeeping; `tools/` with uv and dataset cards; Specchio skeleton.
-5b-crawler. The crawler v0 (`tools/`): discover, licence gate, polite fetch, extract,
-   cards, reference graph; runs in parallel from here on.
+5b-crawler. ✅ (v0.6.0) The crawler v0 (`tools/`): Wikidata (authors, influences,
+   works) + Wikisource (texts); licence gate; polite fetch with cache; extraction;
+   JSON Lines, card, queue of lessons (`docs/library.md`). Runs in parallel from here on.
+   Next versions: more sources (Gutenberg mirror, Deutsches Textarchiv, open
+   textbooks), secondary literature and the reference walk, the language-model helper.
 5c. Stars v2 within 100 pc (Gaia + HYG as two voices; exact Morton codes; the HR
     relation as the first learning test).
 5d. Fast and slow tallies; stochastic votes from the seed.
@@ -234,3 +238,8 @@ cargo run -p monade-run -- set-spec KEY VALUE --motive M
   the RTX 4060 seen by `doctor`). Specchio gains Commands (Verify, Doctor, Foundations,
   Stars) and `Specchio.cmd`; data folder `C:\monade-data` without a D: drive. Advice:
   keep the repository outside OneDrive (it locks and removes files while syncing).
+- **2026-11-19 · v0.6.0.** The crawler v0 and the Specchio buttons Crawl and Library.
+  Written and tested with recorded answers (this machine cannot reach Wikidata or
+  Wikisource): the first real run is on the author's laptop. JSON Lines instead of
+  Parquet for v0 (readable; read in Rust with `serde_json`). Gutenberg not used: it
+  forbids automated access to its website.

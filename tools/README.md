@@ -11,8 +11,13 @@ and the packages, the same on every machine.
 uv run --project tools monade-tools doctor           what the tools see (Python, data folder, disk, GPU)
 uv run --project tools monade-tools card new ...     write card.json for a folder of data
 uv run --project tools monade-tools card check F     check a card and its files
+uv run --project tools monade-tools crawl run       the crawler: reads the seed authors (tools/seeds.toml)
+uv run --project tools monade-tools crawl status    what the library holds
 uv run --project tools python -m unittest discover -s tools/tests
 ```
+
+The crawler and its files: `docs/library.md`. In Specchio: the buttons Crawl (in the
+background, at most 30 minutes) and Library.
 
 The same through the Rust program: `cargo run -p monade-run -- tools doctor`.
 

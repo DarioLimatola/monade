@@ -7,7 +7,8 @@
 //! Every page is built by [`respond`] (and every command by [`command`]), so they
 //! can be tested without a server; [`serve`] only moves bytes.
 //!
-//! Commands are a fixed list (check, doctor, show, stars): nothing else can be run.
+//! Commands are a fixed list (check, doctor, show, stars, crawl, library): nothing
+//! else can be run.
 //! They are accepted only as POST with the header `X-Monade: 1`, which a page of
 //! another site cannot send to this server (the browser blocks it), so no web page
 //! can start a command behind the author's back.
@@ -228,7 +229,7 @@ pub fn respond(path: &str, ctx: &Ctx, now: &str) -> Reply {
 }
 
 /// The commands that can be run from Specchio: path, button, what it does.
-const COMMANDS: [(&str, &str, &str); 4] = [
+const COMMANDS: [(&str, &str, &str); 6] = [
     (
         "check",
         "Verify",
@@ -240,6 +241,16 @@ const COMMANDS: [(&str, &str, &str); 4] = [
         "what the Python tools see: Python, data folder, free disk, GPU",
     ),
     ("show", "Foundations", "point 0 and the specifications"),
+    (
+        "crawl",
+        "Crawl",
+        "the crawler reads the seed authors in the background, for at most 30 minutes",
+    ),
+    (
+        "library",
+        "Library",
+        "what the crawler has gathered: authors, works, refusals, lessons queued",
+    ),
     (
         "stars",
         "Stars",
@@ -310,7 +321,30 @@ pub fn command(path: &str, body: &str, trusted: bool, ctx: &Ctx) -> Reply {
     let stars = ctx.stars.display().to_string();
     let args: Vec<String> = match path.trim_start_matches("/run/") {
         "check" => vec!["check".into(), "--dir".into(), dir, "--runs".into(), runs],
-        "doctor" => vec!["tools".into(), "doctor".into()],
+        "doctor" | "library" => {
+            let tool: Vec<String> = if path.ends_with("doctor") {
+                vec!["doctor".into()]
+            } else {
+                vec!["crawl".into(), "status".into()]
+            };
+            return match crate::tools_output(&tool) {
+                Ok(text) => reply(200, TEXT, text),
+                Err(e) => reply(200, TEXT, format!("error: {e}\n")),
+            };
+        }
+        "crawl" => {
+            return match crawl_in_background() {
+                Ok(()) => reply(
+                    200,
+                    TEXT,
+                    "crawl started in the background (at most 30 minutes).\n\
+                     Press Library to see what it has gathered; the full log is crawl.log\n\
+                     in the folder biblioteca of the data folder. Close Specchio freely: the crawl goes on.\n"
+                        .into(),
+                ),
+                Err(e) => reply(200, TEXT, format!("error: {e}\n")),
+            };
+        }
         "show" => vec!["show".into(), "--dir".into(), dir],
         "stars" => {
             let catalog = body.trim().trim_matches('"');
@@ -335,6 +369,29 @@ pub fn command(path: &str, body: &str, trusted: bool, ctx: &Ctx) -> Reply {
         Ok(text) => reply(200, TEXT, text),
         Err(e) => reply(200, TEXT, format!("error: {e}\n")),
     }
+}
+
+/// Starts `monade-tools crawl run --minutes 30` as a separate process and returns at
+/// once; the crawl writes its own log. A second crawl refuses to start (lock file).
+fn crawl_in_background() -> Result<(), String> {
+    std::process::Command::new("uv")
+        .args([
+            "run",
+            "--quiet",
+            "--project",
+            "tools",
+            "monade-tools",
+            "crawl",
+            "run",
+            "--minutes",
+            "30",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("cannot start uv ({e}); see the Doctor"))
 }
 
 /// Serves Specchio on 127.0.0.1:`port` until the process is stopped (Ctrl+C);

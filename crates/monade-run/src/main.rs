@@ -434,17 +434,33 @@ fn specchio_command(a: &Args) -> Result<String, CliError> {
     Ok(String::new())
 }
 
-/// Runs `uv run --project tools monade-tools ARGS` and returns what it printed.
+/// The command that runs the Python tools: `uv run --project tools monade-tools ARGS`.
+fn uv(args: &[String]) -> std::process::Command {
+    let mut c = std::process::Command::new("uv");
+    c.args(["run", "--quiet", "--project", "tools", "monade-tools"])
+        .args(args);
+    c
+}
+
+fn uv_missing(e: &std::io::Error) -> CliError {
+    CliError::Tool(format!(
+        "cannot start uv ({e}).\nInstall it: powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"\nthen open a new terminal in the repository folder."
+    ))
+}
+
+/// Runs the Python tools with the terminal attached: their output appears as they work.
 fn tools_command(args: &[String]) -> Result<String, CliError> {
-    let out = std::process::Command::new("uv")
-        .args(["run", "--quiet", "--project", "tools", "monade-tools"])
-        .args(args)
-        .output()
-        .map_err(|e| {
-            CliError::Tool(format!(
-                "cannot start uv ({e}).\nInstall it: powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"\nthen open a new terminal in the repository folder."
-            ))
-        })?;
+    let status = uv(args).status().map_err(|e| uv_missing(&e))?;
+    if status.success() {
+        Ok(String::new())
+    } else {
+        Err(CliError::Tool(format!("the tools ended with {status}")))
+    }
+}
+
+/// Runs the Python tools and returns what they printed (for Specchio).
+fn tools_output(args: &[String]) -> Result<String, CliError> {
+    let out = uv(args).output().map_err(|e| uv_missing(&e))?;
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
     if out.status.success() {

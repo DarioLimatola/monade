@@ -12,3 +12,4 @@ source of truth; these copies are refreshed with each version).
   the blackboard, vote and residue, communication, Logos, the hash function, tests
   17–21. Details and reasons behind sections 10 of the structure.
 - `data-cards.md` — the format of the dataset cards written by the tools.
+- `library.md` — the crawler: sources, the gate, the files of the library.

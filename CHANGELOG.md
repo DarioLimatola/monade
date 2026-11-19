@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.0 — 2026-11-19
+
+- The crawler v0 (`tools/`, `monade-tools crawl run | status`): from the seed authors
+  (`tools/seeds.toml`) to clean texts. Wikidata gives the author, the death year, the
+  influences and the works; Wikisource (it, de, en) gives the texts (a work and its
+  chapters). The gate takes only authors dead for more than 70 years and only texts in
+  the author's own languages; refusals are recorded once with their reason. Polite:
+  serial requests, a pause per host, a User-Agent with a contact, `maxlag`, retries,
+  robots.txt for other sites; a cache on disk, so every run continues the last one;
+  a lock against two crawls at once; a time budget. Output in JSON Lines under
+  `<data>/biblioteca/` with a dataset card and a queue of lessons (`docs/library.md`).
+- Tests of the crawler with recorded answers (no network): the licence rule, the
+  extraction of text from Wikisource HTML, Wikidata parsing, a full crawl and its
+  resumption.
+- Specchio: buttons Crawl (starts the crawler in the background) and Library.
+- `monade-run tools` shows the output of the tools while they work; Specchio collects it.
+- Tools pinned to Python 3.13 (`tools/.python-version`), so every package has wheels.
+
 ## 0.5.2 — 2026-11-19
 
 - Specchio gains the room **Commands**: buttons for Verify (check), Doctor, Foundations
