@@ -20,7 +20,8 @@ library on disk (`max_gb`, default 64).
 Everything is written under `<data>/biblioteca/`:
 
     seeds.toml   the starting authors (private: kept in the data folder, not in the repo)
-    texts/<lang>/<lang>-<work>.jsonl   one paragraph per line: {"page", "i", "text"}
+    texts/<lang>/<lang>-<work>.jsonl.zst   one paragraph per line: {"page", "i", "text"}, Zstandard
+    index.sqlite   full-text index of the paragraphs (rebuilt by `library pack`)
     authors.jsonl  works.jsonl  edges.jsonl  refused.jsonl  frontier.jsonl   the tables
     lessons.jsonl  the queue of works for the mind (read from step 6b)
     seeds.lock.json  which Wikidata item each seed became (check it)
@@ -39,7 +40,7 @@ import time
 import tomllib
 from pathlib import Path
 
-from . import cards, extract, wiki
+from . import cards, extract, store, wiki
 from .net import Fetcher, FetchError  # noqa: F401  (Fetcher is used by the CLI)
 
 #: Years after the author's death before the work is free in the EU (then 1 January).
@@ -144,33 +145,41 @@ class Budget:
 def library_bytes(lib: Library) -> int:
     """Size of the texts on disk."""
     texts = lib.root / "texts"
-    return sum(p.stat().st_size for p in texts.rglob("*.jsonl")) if texts.is_dir() else 0
+    if not texts.is_dir():
+        return 0
+    return sum(p.stat().st_size for p in texts.rglob("*") if p.suffix in (".jsonl", ".zst"))
 
 
-def crawl_work(fetch: Fetcher, lib: Library, author: str, w: dict, max_pages: int) -> dict | None:
-    """Fetches one work (main page + chapters) and writes its paragraphs."""
+def crawl_work(fetch: Fetcher, lib: Library, author: str, w: dict, max_pages: int, mirror=None) -> dict | None:
+    """Takes one work (main page + chapters), from the local mirror of the dump if there
+    is one for its language, else from the Wikisource API; writes its paragraphs
+    compressed and adds them to the index."""
     lang, title = w["lang"], w["title"]
     work_id = f"{lang}-{w['work']}"
-    sub = wiki.parse_subpages(fetch.get_json(wiki.subpages_url(lang, title)))
+    if mirror is not None:
+        sub = mirror.subpages(title)
+        read = mirror.paragraphs
+    else:
+        sub = wiki.parse_subpages(fetch.get_json(wiki.subpages_url(lang, title)))
+
+        def read(page: str) -> list[str]:
+            return extract.paragraphs(wiki.parse_page(fetch.get_json(wiki.page_url(lang, page))))
+
     pages = [title] + sub[:max_pages]
-    out_path = lib.path(f"texts/{lang}/{work_id}.jsonl")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out_path.with_suffix(".tmp")
-    n_par = n_chars = 0
-    with open(tmp, "w", encoding="utf-8") as f:
+    out_path = lib.path(f"texts/{lang}/{work_id}.jsonl.zst")
+
+    def rows():
         for page in pages:
-            paras = extract.paragraphs(wiki.parse_page(fetch.get_json(wiki.page_url(lang, page))))
+            paras = read(page)
             if page == title and sub and extract.is_index_page(paras):
                 continue  # the main page only lists the chapters
             for i, text in enumerate(paras):
-                f.write(json.dumps({"page": page, "i": i, "text": text}, ensure_ascii=False) + "\n")
-                n_par += 1
-                n_chars += len(text)
+                yield {"page": page, "i": i, "text": text}
+
+    n_par, n_chars = store.write_texts(out_path, rows())
     if n_par == 0:
-        tmp.unlink()
         lib.refuse({"what": work_id, "title": title, "why": "no text found"})
         return None
-    tmp.replace(out_path)
     row = {
         "work_id": work_id,
         "work_qid": w["work"],
@@ -185,8 +194,14 @@ def crawl_work(fetch: Fetcher, lib: Library, author: str, w: dict, max_pages: in
         "blake3": cards.file_hash(out_path),
         "licence": "public domain (EU); transcription: Wikisource, CC BY-SA 4.0",
         "path": out_path.relative_to(lib.root).as_posix(),
+        "source": "dump" if mirror is not None else "api",
     }
     lib.append("works.jsonl", row)
+    idx = store.Index(lib.root)
+    try:
+        idx.add(work_id, row["path"])
+    finally:
+        idx.close()
     lib.append("lessons.jsonl", {"work_id": work_id, "lang": lang, "path": row["path"]})
     return row
 
@@ -224,6 +239,7 @@ def run(
     max_gb: float = 64,
     fetch: Fetcher | None = None,
     year: int | None = None,
+    mirrors: dict | None = None,
 ) -> dict:
     """One crawl. Returns counts: authors, works, refused, requests."""
     lib = Library(root)
@@ -236,6 +252,9 @@ def run(
     lock_new: dict[str, dict] = {}
     in_frontier = {f["qid"] for f in lib.rows("frontier.jsonl")}
     counts = {"authors": 0, "works": 0, "refused": 0}
+    mirrors = mirrors or {}
+    if mirrors:
+        lib.log("local mirror of Wikisource for " + ", ".join(sorted(mirrors)) + ": chapters read from the dump")
     lib.log(f"crawl start: max {max_works} works per author, links up to depth {max_depth}, {minutes} minutes, {max_gb} GB")
     tried: set[str] = set()  # targets attempted in this run (a network error is retried next run)
 
@@ -319,7 +338,7 @@ def run(
             if work_id in done:
                 continue
             try:
-                row = crawl_work(fetch, lib, qid, w, max_pages)
+                row = crawl_work(fetch, lib, qid, w, max_pages, mirrors.get(w["lang"]))
             except FetchError as e:
                 lib.log(f"  {w['title']}: network error, retried next run ({e})")
                 continue
@@ -351,14 +370,15 @@ def run(
 
 def write_card(lib: Library) -> None:
     """The dataset card of the library (texts and tables; not the cache)."""
-    files = [p for p in (lib.root / "texts").rglob("*.jsonl")] if (lib.root / "texts").is_dir() else []
+    texts = lib.root / "texts"
+    files = sorted(p for p in texts.rglob("*") if p.suffix in (".jsonl", ".zst")) if texts.is_dir() else []
     files += [lib.path(t) for t in ("authors.jsonl", "works.jsonl", "edges.jsonl") if lib.path(t).is_file()]
     if not files:
         return
     langs = sorted({w["lang"] for w in lib.rows("works.jsonl")})
     card = cards.new_card(
         name="biblioteca",
-        description="Works of the seed authors from Wikisource, with authors and influences from Wikidata.",
+        description="Works of the starting authors and of the authors linked to them, from Wikisource, with authors and influences from Wikidata.",
         source="Wikisource (texts), Wikidata (authors, works, influences)",
         url="https://wikisource.org",
         licence="texts: public domain in the EU; Wikisource transcriptions: CC BY-SA 4.0; Wikidata: CC0",
@@ -400,6 +420,10 @@ def status(root: Path, names: bool = False) -> str:
         f"edges      {len(lib.rows('edges.jsonl'))}",
         f"lessons    {len(lib.rows('lessons.jsonl'))} queued for the mind",
     ]
+    if lib.path("index.sqlite").is_file():
+        idx = store.Index(root)
+        lines.append(f"index      {idx.count()} paragraphs searchable")
+        idx.close()
     if names:
         lines.append("authors: " + ", ".join(a["label"] for a in authors))
         lines += [f"refused: {r.get('label') or r['what']}: {r['why']}" for r in refused]
@@ -407,3 +431,37 @@ def status(root: Path, names: bool = False) -> str:
     if lock.is_file():
         lines.append(f"running    since {lock.read_text(encoding='utf-8').strip()}")
     return "\n".join(lines)
+
+
+def pack(root: Path) -> dict:
+    """Compresses the texts of an older library (plain `.jsonl`) and rebuilds the index.
+    Returns counts: packed files, bytes before and after, paragraphs indexed."""
+    lib = Library(root)
+    works = lib.rows("works.jsonl")
+    before = after = packed = 0
+    for w in works:
+        p = root / w["path"]
+        if p.suffix == ".jsonl" and p.is_file():
+            new = p.with_name(p.name + ".zst")
+            store.write_texts(new, store.read_texts(p))
+            before += p.stat().st_size
+            after += new.stat().st_size
+            p.unlink()
+            w["path"] = new.relative_to(root).as_posix()
+            w["blake3"] = cards.file_hash(new)
+            packed += 1
+    if packed:
+        for table in ("works.jsonl", "lessons.jsonl"):
+            rows = works if table == "works.jsonl" else lib.rows(table)
+            if table == "lessons.jsonl":
+                paths = {w["work_id"]: w["path"] for w in works}
+                for r in rows:
+                    r["path"] = paths.get(r["work_id"], r["path"])
+            tmp = lib.path(table + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                for r in rows:
+                    f.write(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n")
+            tmp.replace(lib.path(table))
+        write_card(lib)
+    indexed = store.rebuild(root, works)
+    return {"packed": packed, "before": before, "after": after, "indexed": indexed}

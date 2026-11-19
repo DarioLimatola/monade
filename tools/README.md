@@ -13,6 +13,10 @@ uv run --project tools monade-tools card new ...     write card.json for a folde
 uv run --project tools monade-tools card check F     check a card and its files
 uv run --project tools monade-tools crawl run       the crawler: from the starting authors (<data>/biblioteca/seeds.toml) along their links
 uv run --project tools monade-tools crawl status    what the library holds
+uv run --project tools monade-tools dump get --lang all     download the Wikisource dumps (once, resumable)
+uv run --project tools monade-tools dump build --lang all   build the local mirrors the crawler reads
+uv run --project tools monade-tools library search "WORDS"  find paragraphs in the library
+uv run --project tools monade-tools library pack            compress older texts, rebuild the index
 uv run --project tools python -m unittest discover -s tools/tests
 ```
 

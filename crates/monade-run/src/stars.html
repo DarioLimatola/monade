@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Monade · stars</title><style>
+:root{--bg:#0b0b0d;--fg:#e6e6e6;--mute:#8a8a8a;--line:#26262a}
+*{box-sizing:border-box}
+body{margin:0;padding:20px 28px;background:var(--bg);color:var(--fg);font:13px/1.6 system-ui,'Segoe UI',Helvetica,Arial,sans-serif;font-variant-numeric:tabular-nums}
+h1{font-size:16px;font-weight:600;margin:0 0 4px;letter-spacing:.04em}
+h2{font-size:13px;font-weight:600;margin:20px 0 6px;color:var(--mute);text-transform:uppercase;letter-spacing:.08em}
+.meta{color:var(--mute)} .intro{max-width:900px}
+.bar{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:8px 0}
+select,button{background:#18181c;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 8px;font:inherit}
+input[type=range]{width:220px;vertical-align:middle}
+.row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
+canvas{display:block;background:#000;border:1px solid var(--line);border-radius:4px}
+#c{cursor:grab}
+</style></head><body>
+<h1>MONADE · STARS</h1>
+<div class="meta">{{STARS}} stars read · {{KEPT}} kept as octal addresses ({{BYTES}} bytes) · {{OUTSIDE}} outside the cube · largest error {{ERROR}} · source: {{SOURCE}}</div>
+<p class="intro">Every star is one address of 21 octal digits (63 bits) in a cube of 16 777 pc around the Sun, down to cells of 0.008 pc: the place is exact, and only the stars are stored, not the empty space. Any region is a prefix of the address, so the mind can turn it into a dense Monade when it needs to compare regions. Colour from the colour index B-V; size and light from the magnitude.</p>
+<div class="bar">
+<label>Radius <input type="range" id="radius" min="0" max="1000" value="430"> <span id="rv"></span></label>
+<label>Light <select id="light"><option value="app">as seen from the Earth</option><option value="abs">true (all at 10 pc)</option></select></label>
+<label><input type="checkbox" id="eye"> naked eye only</label>
+<label><input type="checkbox" id="spin" checked> turn</label>
+<label><input type="checkbox" id="labels" checked> names</label>
+<button id="reset">reset view</button>
+<span class="meta" id="info"></span>
+</div>
+<div class="row">
+<canvas id="c" width="900" height="640"></canvas>
+<div><canvas id="hr" width="380" height="420"></canvas>
+<p class="meta" style="max-width:380px">Hertzsprung–Russell diagram of the stars within the radius: colour (left blue, right red) against true brightness (up bright). The diagonal band is the main sequence, where stars spend most of their life; the giants are above it on the right, the white dwarfs below on the left. Finding this relation from the data will be the first learning test on the stars.</p></div>
+</div>
+<p class="meta intro">Drag to turn · wheel to zoom. Star data: <a href="https://github.com/astronexus/HYG-Database" style="color:inherit">HYG Database</a> by David Nash (astronexus.com), licensed under <a href="https://creativecommons.org/licenses/by-sa/4.0/" style="color:inherit">CC BY-SA 4.0</a>. Changed here: positions as octal addresses of cells of 0.008 pc, magnitudes and colour rounded. This map, as adapted material, is shared under the same licence.</p>
+<script>
+const CODES="{{CODES}}",INFO="{{INFO}}",NAMES={{NAMES}};
+function dec(b){const s=atob(b),a=new Uint8Array(s.length);for(let i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return a;}
+const cb=dec(CODES),ib=dec(INFO),N=cb.length/8,cv=new DataView(cb.buffer),iv=new DataView(ib.buffer);
+const X=new Float32Array(N),Y=new Float32Array(N),Z=new Float32Array(N),R=new Float32Array(N),BV=new Float32Array(N),M=new Float32Array(N),A=new Float32Array(N);
+const HALF=1<<20,CELL=0.008;
+for(let i=0;i<N;i++){
+  const lo=cv.getUint32(i*8,true),hi=cv.getUint32(i*8+4,true);let x=0,y=0,z=0;
+  for(let k=0;k<21;k++){const b=3*k;
+    const bit=j=>j<32?(lo>>>j)&1:(hi>>>(j-32))&1;
+    x|=bit(b)<<k;y|=bit(b+1)<<k;z|=bit(b+2)<<k;}
+  X[i]=(x-HALF+.5)*CELL;Y[i]=(y-HALF+.5)*CELL;Z[i]=(z-HALF+.5)*CELL;R[i]=Math.hypot(X[i],Y[i],Z[i]);
+  const f=iv.getUint32(i*4,true),ci=f&511,mq=(f>>>9)&127,aq=(f>>>16)&255;
+  BV[i]=ci===511?NaN:ci/100-.5;M[i]=mq===127?NaN:mq/4-2;A[i]=aq===255?NaN:aq/8-10;}
+// Star colours by B-V (blackbody colours of Mitchell Charity, interpolated).
+const CT=[[-.4,155,176,255],[-.2,170,191,255],[0,202,215,255],[.3,248,247,255],[.6,255,244,234],[.8,255,233,210],[1.0,255,218,181],[1.4,255,196,140],[2.0,255,170,90]];
+function col(bv){if(isNaN(bv))return[150,150,150];if(bv<=CT[0][0])return CT[0].slice(1);
+  for(let j=1;j<CT.length;j++)if(bv<=CT[j][0]){const a=CT[j-1],b=CT[j],t=(bv-a[0])/(b[0]-a[0]);return[0,1,2].map(k=>a[k+1]+(b[k+1]-a[k+1])*t);}return CT[CT.length-1].slice(1);}
+const C=[];for(let i=0;i<N;i++)C.push(col(BV[i]));
+const c=document.getElementById('c'),g=c.getContext('2d'),W=c.width,H=c.height;
+const radius=document.getElementById('radius'),rv=document.getElementById('rv'),info=document.getElementById('info');
+let yaw=0.6,pitch=0.35,zoom=1,drag=null,last=performance.now();
+const rad=()=>2*Math.pow(4000,radius.value/1000); // 2 pc .. 8000 pc, logarithmic
+function draw(){
+  const r=rad(),abs=document.getElementById('light').value==='abs',eye=document.getElementById('eye').checked;
+  rv.textContent=(r<10?r.toFixed(1):Math.round(r).toLocaleString())+' pc';
+  const img=g.createImageData(W,H),d=img.data;
+  const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch),f=zoom*H*0.9/r,D=3*r;
+  function proj(x,y,z){const x1=cy*x-sy*y,y1=sy*x+cy*y,y2=cp*y1-sp*z,z2=sp*y1+cp*z,w=(D+y2)/D;if(w<.05)return null;return[W/2+f*x1/w,H/2-f*z2/w,w];}
+  let shown=0;
+  for(let i=0;i<N;i++){if(R[i]>r)continue;const m=abs?A[i]:M[i];if(eye&&!(M[i]<=6))continue;
+    const p=proj(X[i],Y[i],Z[i]);if(!p)continue;
+    const mm=isNaN(m)?12:m,light=Math.min(1,Math.max(.12,Math.pow(10,-.4*(mm-(abs?2:4))))),size=Math.max(1,Math.min(4,3-mm*.25));
+    const px=p[0]|0,py=p[1]|0,k=C[i];
+    for(let dy=0;dy<size;dy++)for(let dx=0;dx<size;dx++){const xx=px+dx-(size>>1),yy=py+dy-(size>>1);if(xx<0||yy<0||xx>=W||yy>=H)continue;
+      const o=(yy*W+xx)*4;d[o]=Math.min(255,d[o]+k[0]*light);d[o+1]=Math.min(255,d[o+1]+k[1]*light);d[o+2]=Math.min(255,d[o+2]+k[2]*light);}
+    shown++;}
+  for(let i=3;i<d.length;i+=4)d[i]=255;
+  g.putImageData(img,0,0);
+  const sun=proj(0,0,0);if(sun){g.strokeStyle='#ffd700';g.beginPath();g.arc(sun[0],sun[1],6,0,7);g.stroke();g.fillStyle='#ffd700';g.font='11px system-ui';g.fillText('Sun',sun[0]+8,sun[1]-6);}
+  if(document.getElementById('labels').checked){g.fillStyle='#aaa';g.font='11px system-ui,sans-serif';
+    for(const [i,n] of NAMES){if(R[i]>r||!(M[i]<(r<30?6:2)))continue;const p=proj(X[i],Y[i],Z[i]);if(p)g.fillText(n,p[0]+5,p[1]-4);}}
+  info.textContent=shown.toLocaleString()+' stars within '+rv.textContent;
+  hr(r,eye);
+}
+const h=document.getElementById('hr'),hg=h.getContext('2d'),HW=h.width,HH=h.height;
+function hr(r,eye){
+  const img=hg.createImageData(HW,HH),d=img.data,L=40,T=10,PW=HW-L-10,PH=HH-T-30;
+  for(let i=0;i<N;i++){if(R[i]>r||isNaN(BV[i])||isNaN(A[i]))continue;if(eye&&!(M[i]<=6))continue;
+    const x=L+(BV[i]+.4)/2.4*PW|0,y=T+(A[i]+8)/24*PH|0;if(x<L||x>=L+PW||y<T||y>=T+PH)continue;
+    const o=(y*HW+x)*4,k=C[i];d[o]=Math.min(255,d[o]+k[0]*.5);d[o+1]=Math.min(255,d[o+1]+k[1]*.5);d[o+2]=Math.min(255,d[o+2]+k[2]*.5);}
+  for(let i=3;i<d.length;i+=4)d[i]=255;hg.putImageData(img,0,0);
+  hg.fillStyle='#888';hg.font='10px system-ui';
+  [-8,-4,0,4,8,12,16].forEach(m=>hg.fillText(m,6,T+(m+8)/24*PH+3));
+  [-.4,0,.5,1,1.5,2].forEach(b=>hg.fillText(b,L+(b+.4)/2.4*PW-6,HH-14));
+  hg.fillText('colour B-V',L+PW/2-24,HH-2);
+}
+function tick(t){const dt=Math.min(.1,(t-last)/1000);last=t;
+  if(document.getElementById('spin').checked&&!drag){yaw+=dt*0.12;draw();} // radians per second: the same on every screen
+  requestAnimationFrame(tick);}
+c.addEventListener('mousedown',e=>{drag=[e.clientX,e.clientY];c.style.cursor='grabbing';});
+addEventListener('mouseup',()=>{drag=null;c.style.cursor='grab';});
+addEventListener('mousemove',e=>{if(!drag)return;yaw+=(e.clientX-drag[0])*0.006;pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.clientY-drag[1])*0.006));drag=[e.clientX,e.clientY];draw();});
+c.addEventListener('wheel',e=>{e.preventDefault();zoom*=e.deltaY<0?1.1:1/1.1;draw();},{passive:false});
+document.getElementById('reset').onclick=()=>{yaw=0.6;pitch=0.35;zoom=1;draw();};
+['radius','light','eye','labels'].forEach(id=>document.getElementById(id).oninput=draw);
+draw();requestAnimationFrame(tick);
+</script></body></html>

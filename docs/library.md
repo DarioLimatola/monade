@@ -20,6 +20,28 @@ deeper from where the walk stopped.
 The interface (Specchio, `crawl status`) shows counts only; `crawl status --names`
 lists the authors on request.
 
+## Faster: the dump of Wikisource
+
+`dump get --lang it|de|en|all` downloads the weekly CirrusSearch dump of each
+Wikisource (`dumps.wikimedia.org/other/cirrussearch/`, the plain text of every page of
+the main namespace, chapters transcluded from scans included): one resumable download
+per language instead of one request per chapter. `dump build` turns it into a local
+mirror, `<data folder>/dumps/<lang>wikisource.sqlite` (title, Wikidata item, text
+compressed with Zstandard). When a mirror exists for a language, the crawler reads the
+chapters from it; Wikidata is still asked for authors, links and works, at one request
+per second. The price: the dump's text has no paragraph breaks, so pages are cut into
+chunks of at most 1200 characters at sentence ends, and verses lose their line breaks
+(`"source": "dump"` in `works.jsonl`; `"api"` otherwise).
+
+## Storage and search
+
+Texts are JSON Lines compressed with Zstandard (`.jsonl.zst`; readable with any zstd
+tool). `index.sqlite` indexes every paragraph (SQLite FTS5, accents and case folded)
+without a copy of the text: a hit gives the file and the line, and the paragraph is read
+back. `library search "WORDS"` (FTS5 syntax: words, `"a phrase"`, `a OR b`, `pre*`);
+`library pack` compresses texts of an older library and rebuilds the index, which can
+always be rebuilt from the texts.
+
 ## Sources (v0)
 
 | Source | What | How |
@@ -48,11 +70,12 @@ their robots.txt allows it. Project Gutenberg forbids automated access to its we
 
 | File | One line per |
 |---|---|
-| `texts/<lang>/<lang>-<work>.jsonl` | paragraph: `page`, `i`, `text` (Unicode NFC; verses keep their line breaks) |
+| `texts/<lang>/<lang>-<work>.jsonl.zst` | paragraph: `page`, `i`, `text` (Unicode NFC; verses keep their line breaks when taken from the API) |
+| `index.sqlite` | the full-text index (rebuilt by `library pack`) |
 | `seeds.toml` | starting author: `search`, `lang`, optional `qid` (private) |
 | `authors.jsonl` | author taken: `qid`, `label`, `died`, `lang`, `depth` |
 | `frontier.jsonl` | author to visit: `qid`, `label`, `depth`, `via`, `rel` |
-| `works.jsonl` | work taken: `work_id`, `work_qid`, `author_qid`, `title`, `lang`, `url`, `pages`, `paragraphs`, `chars`, `blake3`, `licence`, `path` |
+| `works.jsonl` | work taken: `work_id`, `work_qid`, `author_qid`, `title`, `lang`, `url`, `pages`, `paragraphs`, `chars`, `blake3`, `licence`, `path`, `source` (`api` or `dump`) |
 | `edges.jsonl` | edge of the reference graph: `from`, `rel` (`influenced_by`, `influenced`, `wrote`), `to`, labels |
 | `refused.jsonl` | refusal: `what`, `why` (recorded once) |
 | `lessons.jsonl` | work queued for the mind (read by the gate, step 6b) |

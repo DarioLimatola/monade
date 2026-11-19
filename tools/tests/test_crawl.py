@@ -9,7 +9,7 @@ import unittest
 import urllib.parse
 from pathlib import Path
 
-from monade_tools import cards, crawl, extract, wiki
+from monade_tools import cards, crawl, extract, store, wiki
 from monade_tools.net import Fetcher
 
 PAGE_HTML = """
@@ -152,7 +152,9 @@ class Crawl(unittest.TestCase):
         works = lib.rows("works.jsonl")
         self.assertEqual(works[0]["work_id"], "de-Q75")
         self.assertEqual(works[0]["pages"], 3)
-        texts = [json.loads(l) for l in (root / works[0]["path"]).read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(works[0]["path"].endswith(".jsonl.zst"))
+        self.assertEqual(works[0]["source"], "api")
+        texts = list(store.read_texts(root / works[0]["path"]))
         self.assertEqual({t["page"] for t in texts}, {"Faust I/Zueignung", "Faust I/Nacht"})  # index page skipped
         why = {r.get("label", r["what"]): r["why"] for r in lib.rows("refused.jsonl")}
         self.assertEqual(why["Italo Calvino"], "protected: died 1985")

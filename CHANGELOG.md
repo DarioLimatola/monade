@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.6.4 — 2026-11-19
+
+- Stars v2 (step 5c, first part): every star is one exact Morton code of 63 bits, an
+  octal address of 21 digits in a cube of 16 777 pc around the Sun with cells of
+  0.008 pc (largest error 0.006 pc on HYG v4.1, against 3.8 pc before). Only the stars
+  are stored, sorted (8 bytes a star: 875 kB for 109 401 stars); a region is a prefix,
+  so its stars are one contiguous run, and any region can become a dense 2 MB Monade
+  (`Sky::dense`). The Sun is the corner where eight regions meet (`Sky::around_sun`).
+  Stars at the catalog's unknown distance (100 000 pc) are left out.
+- The map: any radius from 2 to 8 000 pc; colours from B-V (blackbody colours); size
+  and light from the apparent or the absolute magnitude; no grid (exact places); turning
+  at the same speed on every screen (by time, not by frame); the Hertzsprung–Russell
+  diagram of the stars within the radius.
+
+## 0.6.3 — 2026-11-19
+
+- Specchio gains the room **Map** (it replaces the placeholder Memory): the inside of
+  the mind in 3D. Sentences typed in the room (at most 8 of 8 words) become Monadi of
+  512 bits: words and positional roles generated from their names, bindings (role XOR
+  word), sentences (majority), memory (majority of the sentences). Lines are
+  references: made of, answers (asking a sentence for a role gives the nearest word,
+  with its distance), near (at most 211 bits of 512 apart; chance 256 ± 11.3). A click
+  shows a Monade as a cube of 8 × 8 × 8 cells, one per bit, placed by its octal
+  address. Nothing is learned yet: the room is ready to show what learning will add.
+  New module `map` (JSON at `/api/map?s=...`), page `map.html`; rotation by time, the
+  same on every screen.
+
+## 0.6.2 — 2026-11-19
+
+- Texts are stored compressed (Zstandard, `.jsonl.zst`, three to four times smaller)
+  and indexed for search (`index.sqlite`, SQLite FTS5, no copy of the text): the new
+  module `store`; `monade-tools library search "WORDS"` finds paragraphs;
+  `library pack` compresses an older library and rebuilds the index.
+- Wikisource from its dump (module `dump`): `monade-tools dump get --lang it|de|en|all`
+  downloads the weekly CirrusSearch dump (one resumable download, instead of thousands
+  of requests), `dump build` turns it into a local mirror; the crawler then reads the
+  chapters from the mirror (Wikidata is still asked for authors, links and works). The
+  dump has no paragraph breaks: pages are cut at sentence ends, and works say
+  `"source": "dump"`.
+- New Python dependency: `zstandard` (BSD-3).
+
 ## 0.6.1 — 2026-11-19
 
 - The crawler follows links: each author taken adds to a persistent frontier

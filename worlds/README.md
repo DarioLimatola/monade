@@ -12,5 +12,8 @@ The stars around the Sun, from the HYG database (Hipparcos, Yale, Gliese; about
 cargo run --release -p monade-run -- stars --catalog hygdata_v41.csv
 ```
 
-Writes `stars.html`, a 3D map of four 2 MB Monadi (cubes of 32, 128, 512 and 2048
-parsecs around the Sun, 256³ cells each, one bit per cell).
+Every star becomes one exact octal address of 21 digits (a Morton code of 63 bits:
+cube of 16 777 pc around the Sun, cells of 0.008 pc); only the stars are stored, and
+any region can become a dense 2 MB Monade on demand. Writes `stars.html`: a 3D map at
+any radius from 2 to 8 000 pc, colours and light to scale, and the Hertzsprung–Russell
+diagram. Prints the dense Monadi near the Sun at five depths.

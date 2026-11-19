@@ -76,7 +76,9 @@ crates/
     src/check.rs      `check`: 16 checks that say in words and numbers what they verified
     src/runs.rs       run folders: runs/YYYYMMDD-HHMMSS/{run.json, results.jsonl}
     src/report.rs     `report`: one self-contained HTML page (history + latest run)
-    src/stars.rs      first world: stars of a catalog in four 2 MB Monadi + 3D map
+    src/stars.rs      first world: stars as exact octal addresses (sparse) + 3D map, HR
+    src/map.rs        the Map: words, roles, bindings, sentences, memory and their
+                      references as a graph (JSON) for the Specchio room Map (map.html)
     src/specchio.rs   Specchio, the interface: seven rooms served on 127.0.0.1 only;
                       Commands runs a fixed list (check, doctor, show, stars)
   xtask/              `cargo all`: every check
@@ -162,8 +164,10 @@ prereg/ ladder/ properties/ worlds/ benches/   empty for now
    private starting authors in the data folder, ceiling of 64 GB on disk.
    Next versions: more sources (Gutenberg mirror, Deutsches Textarchiv, open
    textbooks), secondary literature, the language-model helper (local, after D1).
-5c. Stars v2 within 100 pc (Gaia + HYG as two voices; exact Morton codes; the HR
-    relation as the first learning test).
+5c. ✅ (v0.6.4, first part) Stars v2: exact Morton codes (63 bits), only the stars
+    stored, dense Monadi of any region on demand, map at any radius, HR diagram.
+    5c-2: Gaia as a second voice (AT-HYG), counts and light per cell, the HR relation
+    as the first learning test.
 5d. Fast and slow tallies; stochastic votes from the seed.
 6. Blackboard: 8 levels of 512 bits, voices with weights, consensus, residue,
    redundancy between voices, niche reserve.
@@ -249,3 +253,14 @@ cargo run -p monade-run -- set-spec KEY VALUE --motive M
   from a persistent frontier instead of starting again from the seeds; the starting
   authors move to the data folder (private, not shown by the interface); `--max-gb 64`.
   The crawler has no language model yet: it is rules and Wikidata links.
+- **2026-11-19 · v0.6.2.** Texts compressed with Zstandard and indexed with SQLite FTS5
+  (`library search`, `library pack`); Wikisource from its weekly CirrusSearch dump
+  (`dump get`, `dump build`): a local mirror the crawler reads instead of the API.
+  Spec `data.ceiling_gib` = 64 set by the author (the laptop has 8 GB of RAM: the mind
+  stays within about 4 GB and reads the data folder in pieces).
+- **2026-11-19 · v0.6.3.** Specchio room Map (replaces Memory): Monadi and references
+  in 3D, a click draws a Monade as a cube of bits (test 17, first part). Built from
+  generated vectors and algebra: it will show what learning adds (steps 6 onward).
+- **2026-11-19 · v0.6.4.** Stars v2 (5c, first part): exact sparse codes, no grid,
+  rotation by time, map to 8 000 pc, HR diagram. Verified on HYG v4.1 (109 401 stars,
+  largest error 0.006 pc). Next: 5c-2 (Gaia voice, HR learning test), then 5d.

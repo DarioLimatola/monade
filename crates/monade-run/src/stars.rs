@@ -1,45 +1,45 @@
-//! A first world: the stars of a catalog, held in Monadi.
+//! A first world: the stars of a catalog, held as octal addresses.
 //!
-//! A 2 MB Monade is a cube of 256 x 256 x 256 cells, one bit per cell (the octal
-//! address: 8 base-8 digits from the whole cube down to one cell). Each star lights
-//! the bit of its cell, so one Monade is a map of the sky around the Sun at one
-//! scale. Four scales (half-widths 16, 64, 256, 1024 parsecs), each 4 times the one
-//! before, are four Monadi. The other dimensions (seen with the naked eye, colour)
-//! are further Monadi with the same addresses: layers of the same map.
+//! **Sparse, exact.** Every star is one Morton code of 63 bits: an octal address of
+//! 21 digits in a cube of 16 777 parsecs around the Sun, down to cells of 0.008 pc
+//! (a star is at most 0.007 pc from the centre of its cell: exact for this catalog).
+//! Only the stars are stored, sorted by code, not the empty space: 8 bytes a star
+//! (about 1 MB for 120 000 stars), against 2 MB per Monade per scale before.
 //!
-//! Integers only: positions are read from the catalog's decimal text as
-//! thousandths of a parsec, never as floating point.
+//! **Dense, on demand.** A region is a prefix of the address, so its stars are one
+//! contiguous run of the sorted codes. Any region can be turned into a Monade of
+//! 2 MB (256 × 256 × 256 cells, one bit per cell) by taking the 8 digits that follow
+//! its prefix ([`Sky::dense`]): the dense form is for the mind to compare and combine
+//! regions (XOR, majority, distance), the sparse form is for keeping them.
+//!
+//! Integers only: positions are read from the catalog's decimal text as thousandths
+//! of a parsec, never as floating point.
 
 use crate::check::grouped;
-use monade_core::address::Address;
 use monade_core::size::Size;
-use monade_core::word::{self, Word};
+use monade_core::word::Word;
 use std::fmt::{self, Write as _};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-/// Half-width of each scale's cube, in parsecs (the Sun at the centre).
-pub const HALF_WIDTHS_PC: [i64; 4] = [16, 64, 256, 1024];
+/// Digits of the address of a star (21 octal digits = 63 bits).
+pub const DEPTH: u32 = 21;
+/// Side of the finest cell, thousandths of a parsec.
+pub const CELL_MILLI: i64 = 8;
+/// Half-width of the whole cube, thousandths of a parsec (2^20 cells × 8).
+pub const HALF_MILLI: i64 = CELL_MILLI << (DEPTH - 1);
+/// Distances the catalog marks as unknown (HYG writes 100 000 pc) are left out.
+pub const UNKNOWN_DISTANCE_MILLI: i64 = 99_000_000;
 
-/// The layers of every scale: one Monade each, same addresses.
-pub const LAYERS: [&str; 7] = [
-    "every star",
-    "seen with the naked eye (magnitude 6 or brighter)",
-    "blue (colour index below 0)",
-    "white (0 to 0.5)",
-    "yellow (0.5 to 1)",
-    "orange (1 to 1.5)",
-    "red (1.5 and above)",
-];
-
-const SIDE: i64 = 256;
-
-/// One star: position in thousandths of a parsec, magnitude and colour index in thousandths.
+/// One star: position in thousandths of a parsec, magnitudes and colour in thousandths.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Star {
     /// x, y, z (equatorial, the Sun at 0), thousandths of a parsec.
     pub pos: [i64; 3],
     /// Apparent magnitude, thousandths (smaller is brighter).
     pub mag: Option<i64>,
+    /// Absolute magnitude (as seen from 10 pc), thousandths.
+    pub absmag: Option<i64>,
     /// Colour index B-V, thousandths (smaller is bluer).
     pub ci: Option<i64>,
     /// Proper name, if any.
@@ -87,19 +87,17 @@ pub fn parse_milli(s: &str) -> Option<i64> {
     Some(if neg { -v } else { v })
 }
 
-/// Reads the stars of an HYG-like CSV (columns x, y, z, mag, ci, proper).
+/// Reads the stars of an HYG-like CSV (columns x, y, z, mag, ci, proper; absmag if
+/// present). Stars at the catalog's "unknown distance" are left out.
 pub fn read_catalog(path: &Path) -> Result<Vec<Star>, StarsError> {
     let err = |e: String| StarsError::Read(path.to_path_buf(), e);
     let mut r = csv::Reader::from_path(path).map_err(|e| err(e.to_string()))?;
     let headers = r.headers().map_err(|e| err(e.to_string()))?.clone();
-    let col = |name: &'static str| {
-        headers
-            .iter()
-            .position(|h| h == name)
-            .ok_or(StarsError::Column(name))
-    };
+    let find = |name: &str| headers.iter().position(|h| h == name);
+    let col = |name: &'static str| find(name).ok_or(StarsError::Column(name));
     let (x, y, z) = (col("x")?, col("y")?, col("z")?);
     let (mag, ci, proper) = (col("mag")?, col("ci")?, col("proper")?);
+    let absmag = find("absmag");
     let mut out = Vec::new();
     for rec in r.records() {
         let rec = rec.map_err(|e| err(e.to_string()))?;
@@ -111,9 +109,13 @@ pub fn read_catalog(path: &Path) -> Result<Vec<Star>, StarsError> {
         ) else {
             continue;
         };
+        if px.abs().max(py.abs()).max(pz.abs()) >= UNKNOWN_DISTANCE_MILLI / 2 {
+            continue;
+        }
         out.push(Star {
             pos: [px, py, pz],
             mag: parse_milli(get(mag)),
+            absmag: absmag.and_then(|i| parse_milli(get(i))),
             ci: parse_milli(get(ci)),
             name: get(proper).to_string(),
         });
@@ -121,53 +123,79 @@ pub fn read_catalog(path: &Path) -> Result<Vec<Star>, StarsError> {
     Ok(out)
 }
 
-/// The cell of a position in a cube of half-width `half` (thousandths of a parsec).
-pub fn cell(pos: [i64; 3], half: i64) -> Option<(u32, u32, u32)> {
-    let c = |p: i64| {
-        let shifted = p.checked_add(half)?;
-        if shifted < 0 {
-            return None;
-        }
-        let i = shifted.checked_mul(SIDE)? / (2 * half);
-        u32::try_from(i).ok().filter(|v| i64::from(*v) < SIDE)
+/// The cell of a position along one axis (0 .. 2^21), or None outside the cube.
+fn axis(p: i64) -> Option<u64> {
+    let shifted = p.checked_add(HALF_MILLI)?;
+    if shifted < 0 {
+        return None;
+    }
+    let i = shifted / CELL_MILLI;
+    u64::try_from(i).ok().filter(|v| *v < 1 << DEPTH)
+}
+
+/// Morton code of a cell: bit 3i is bit i of x, 3i + 1 of y, 3i + 2 of z (the
+/// convention of the octal address: each digit is an octant, bit 0 → x).
+pub fn interleave(x: u64, y: u64, z: u64) -> u64 {
+    let mut code = 0;
+    for i in 0..DEPTH {
+        code |= (x >> i & 1) << (3 * i) | (y >> i & 1) << (3 * i + 1) | (z >> i & 1) << (3 * i + 2);
+    }
+    code
+}
+
+/// The cell of a Morton code (the inverse of [`interleave`]).
+pub fn deinterleave(code: u64) -> (u64, u64, u64) {
+    let (mut x, mut y, mut z) = (0, 0, 0);
+    for i in 0..DEPTH {
+        x |= (code >> (3 * i) & 1) << i;
+        y |= (code >> (3 * i + 1) & 1) << i;
+        z |= (code >> (3 * i + 2) & 1) << i;
+    }
+    (x, y, z)
+}
+
+/// The code of a position, or None outside the cube.
+pub fn code_of(pos: [i64; 3]) -> Option<u64> {
+    Some(interleave(axis(pos[0])?, axis(pos[1])?, axis(pos[2])?))
+}
+
+/// The centre of the cell of a code, thousandths of a parsec.
+pub fn centre(code: u64) -> [i64; 3] {
+    let (x, y, z) = deinterleave(code);
+    let c = |v: u64| v as i64 * CELL_MILLI - HALF_MILLI + CELL_MILLI / 2;
+    [c(x), c(y), c(z)]
+}
+
+/// What the page needs of a star beyond its place, in 32 bits: colour index in
+/// hundredths from -0.5 (9 bits, 511 = unknown), apparent magnitude in quarters from
+/// -2 (7 bits, 127 = unknown), absolute magnitude in eighths from -10 (8 bits,
+/// 255 = unknown), named (1 bit).
+pub fn info(s: &Star) -> u32 {
+    let class = |v: Option<i64>, from: i64, step: i64, max: u32| {
+        v.map_or(max, |v| {
+            ((v - from).max(0) / step).min(i64::from(max) - 1) as u32
+        })
     };
-    Some((c(pos[0])?, c(pos[1])?, c(pos[2])?))
+    class(s.ci, -500, 10, 511)
+        | class(s.mag, -2000, 250, 127) << 9
+        | class(s.absmag, -10_000, 125, 255) << 16
+        | u32::from(!s.name.is_empty()) << 24
 }
 
-/// The layers a star belongs to (index into `LAYERS`).
-fn layers_of(s: &Star) -> Vec<usize> {
-    let mut l = vec![0];
-    if s.mag.is_some_and(|m| m <= 6000) {
-        l.push(1);
-    }
-    if let Some(ci) = s.ci {
-        l.push(match ci {
-            i64::MIN..0 => 2,
-            0..500 => 3,
-            500..1000 => 4,
-            1000..1500 => 5,
-            _ => 6,
-        });
-    }
-    l
-}
-
-/// One scale: seven Monadi of 2 MB (the layers) and what was measured building them.
-pub struct Scale {
-    /// Half-width of the cube, parsecs.
-    pub half_pc: i64,
-    /// One Monade (2 MB) per layer.
-    pub layers: Vec<Vec<Word>>,
-    /// Stars inside the cube.
-    pub inside: u64,
-    /// Stars that fell in a cell already lit.
+/// The sky: every star as a code, sorted, with its info.
+pub struct Sky {
+    /// Morton codes, sorted.
+    pub codes: Vec<u64>,
+    /// Info of each star ([`info`]), same order.
+    pub info: Vec<u32>,
+    /// Names of the named stars: (index into codes, name).
+    pub names: Vec<(usize, String)>,
+    /// Stars read but outside the cube.
+    pub outside: u64,
+    /// Stars sharing their cell with another one.
     pub shared: u64,
-    /// Sum of the distances between each star and the centre of its cell, thousandths of a parsec.
-    pub error_sum: u64,
-    /// Largest such distance.
+    /// Largest distance from a star to the centre of its cell, thousandths of a parsec.
     pub error_max: u64,
-    /// Named bright stars (magnitude below 1.5): name and cell.
-    pub names: Vec<(String, (u32, u32, u32))>,
 }
 
 fn isqrt(n: u64) -> u64 {
@@ -183,94 +211,79 @@ fn isqrt(n: u64) -> u64 {
     x
 }
 
-/// Builds the four scales from the stars.
-pub fn build(stars: &[Star]) -> Vec<Scale> {
-    HALF_WIDTHS_PC
-        .iter()
-        .enumerate()
-        .map(|(root, half_pc)| {
-            let half = half_pc * 1000;
-            let mut layers = vec![vec![Word::ZERO; Size::THOUGHT.words()]; LAYERS.len()];
-            let mut sc = Scale {
-                half_pc: *half_pc,
-                layers: Vec::new(),
-                inside: 0,
-                shared: 0,
-                error_sum: 0,
-                error_max: 0,
-                names: Vec::new(),
-            };
-            for s in stars {
-                let Some(c) = cell(s.pos, half) else { continue };
-                let Ok(a) = Address::from_point(root as u32, Size::THOUGHT, c, 8) else {
-                    continue;
-                };
-                let offset = a.bit_offset();
-                let (w, b) = ((offset / 64) as usize, offset % 64);
-                sc.inside += 1;
-                if layers[0][w].bits() >> b & 1 == 1 {
-                    sc.shared += 1;
-                }
-                for l in layers_of(s) {
-                    layers[l][w] = Word::new(layers[l][w].bits() | 1 << b);
-                }
-                // Distance from the star to the centre of its cell.
-                let centre = |i: u32| -half + (2 * i64::from(i) + 1) * half / SIDE;
-                let d = [
-                    s.pos[0] - centre(c.0),
-                    s.pos[1] - centre(c.1),
-                    s.pos[2] - centre(c.2),
-                ];
-                let e = isqrt(d.iter().map(|v| v.unsigned_abs().pow(2)).sum());
-                sc.error_sum += e;
-                sc.error_max = sc.error_max.max(e);
-                if !s.name.is_empty() && s.mag.is_some_and(|m| m < 1500) {
-                    sc.names.push((s.name.clone(), c));
-                }
-            }
-            sc.layers = layers;
-            sc
-        })
-        .collect()
-}
-
-/// The occupied cells of a scale as points, read back from the Monade itself
-/// (bit offset → octal address → point), with one flag bit per further layer.
-pub fn points(sc: &Scale, root: u32) -> Vec<[u8; 4]> {
-    let mut out = Vec::new();
-    for (w, word) in sc.layers[0].iter().enumerate() {
-        let mut bits = word.bits();
-        while bits != 0 {
-            let b = u64::from(bits.trailing_zeros());
-            bits &= bits - 1;
-            let offset = w as u64 * 64 + b;
-            let Ok(a) = Address::from_bit_offset(root, Size::THOUGHT, offset, 8) else {
+impl Sky {
+    /// Builds the sky from the stars.
+    pub fn build(stars: &[Star]) -> Sky {
+        let mut rows: Vec<(u64, u32, &str)> = Vec::with_capacity(stars.len());
+        let (mut outside, mut error_max) = (0, 0);
+        for s in stars {
+            let Some(code) = code_of(s.pos) else {
+                outside += 1;
                 continue;
             };
-            let (x, y, z) = a.point();
-            let mut flags = 0u8;
-            for (l, layer) in sc.layers.iter().enumerate().skip(1) {
-                if layer[w].bits() >> b & 1 == 1 {
-                    flags |= 1 << (l - 1);
-                }
-            }
-            out.push([x as u8, y as u8, z as u8, flags]);
+            let c = centre(code);
+            let e = isqrt(
+                (0..3)
+                    .map(|i| (s.pos[i] - c[i]).unsigned_abs().pow(2))
+                    .sum(),
+            );
+            error_max = error_max.max(e);
+            rows.push((code, info(s), s.name.as_str()));
+        }
+        rows.sort_unstable_by_key(|r| r.0);
+        let shared = rows.windows(2).filter(|w| w[0].0 == w[1].0).count() as u64;
+        Sky {
+            names: rows
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| !r.2.is_empty())
+                .map(|(i, r)| (i, r.2.to_string()))
+                .collect(),
+            codes: rows.iter().map(|r| r.0).collect(),
+            info: rows.iter().map(|r| r.1).collect(),
+            outside,
+            shared,
+            error_max,
         }
     }
-    out
-}
 
-/// Occupied cells in each of the 8 octants (the first digit of the address).
-pub fn octants(sc: &Scale, root: u32) -> [u64; 8] {
-    let mut out = [0u64; 8];
-    for (d, o) in out.iter_mut().enumerate() {
-        if let Ok(a) = Address::root(root, Size::THOUGHT).and_then(|r| r.down(d as u8)) {
-            let from = (a.bit_offset() / 64) as usize;
-            let len = (a.bit_len() / 64) as usize;
-            *o = word::popcount(&sc.layers[0][from..from + len]);
-        }
+    /// The stars of a region: the cube of the address `prefix` with `depth` digits
+    /// (0 = the whole sky). One contiguous run of the sorted codes.
+    pub fn region(&self, prefix: u64, depth: u32) -> Range<usize> {
+        let shift = 3 * (DEPTH - depth.min(DEPTH));
+        let lo = prefix << shift;
+        let hi = (prefix + 1) << shift;
+        self.codes.partition_point(|c| *c < lo)..self.codes.partition_point(|c| *c < hi)
     }
-    out
+
+    /// A region as one dense Monade of 2 MB: 256 × 256 × 256 cells, one bit per cell,
+    /// the bit offset being the 8 digits after the prefix. `depth` at most 13.
+    pub fn dense(&self, prefix: u64, depth: u32) -> Vec<Word> {
+        let depth = depth.min(DEPTH - 8);
+        let mut out = vec![Word::ZERO; Size::THOUGHT.words()];
+        let shift = 3 * (DEPTH - depth - 8);
+        for &code in &self.codes[self.region(prefix, depth)] {
+            let offset = (code >> shift) & ((1 << 24) - 1);
+            let (w, b) = ((offset / 64) as usize, offset % 64);
+            out[w] = Word::new(out[w].bits() | 1 << b);
+        }
+        out
+    }
+
+    /// The 8 regions of `depth` digits (at least 1) that meet at the Sun. The Sun is the
+    /// centre of the whole cube, and the centre of a cube is the corner of its eight
+    /// parts: around the Sun there are always eight regions, never one.
+    pub fn around_sun(depth: u32) -> [u64; 8] {
+        let depth = depth.clamp(1, DEPTH);
+        let s = DEPTH - depth;
+        let sun = 1u64 << (DEPTH - 1); // the cell of the Sun on each axis
+        let mut out = [0; 8];
+        for (o, p) in out.iter_mut().enumerate() {
+            let a = |bit: usize| (sun >> s) - u64::from(o >> bit & 1 == 0);
+            *p = interleave(a(0), a(1), a(2));
+        }
+        out
+    }
 }
 
 /// Thousandths of a parsec as text: 1234 → "1.234 pc".
@@ -278,26 +291,39 @@ fn pc(milli: u64) -> String {
     format!("{}.{:03} pc", milli / 1000, milli % 1000)
 }
 
+/// Side of a region of `depth` digits, thousandths of a parsec.
+pub fn side_milli(depth: u32) -> u64 {
+    (CELL_MILLI as u64) << (DEPTH - depth)
+}
+
 /// A summary for the terminal.
-pub fn summary(stars: &[Star], scales: &[Scale]) -> String {
+pub fn summary(stars: &[Star], sky: &Sky) -> String {
     let mut out = format!(
-        "MONADE · STARS  {} stars read\n\n",
-        grouped(stars.len() as u64)
+        "MONADE · STARS  {} stars read, {} kept as codes ({} bytes), {} outside the cube, {} sharing a cell; \
+         cube {}, cell {}, largest error {}\n\nDense Monadi of 2 MB near the Sun (any region can be one):\n",
+        grouped(stars.len() as u64),
+        grouped(sky.codes.len() as u64),
+        grouped(8 * sky.codes.len() as u64),
+        grouped(sky.outside),
+        grouped(sky.shared),
+        pc(side_milli(0)),
+        pc(CELL_MILLI as u64),
+        pc(sky.error_max),
     );
-    for (root, sc) in scales.iter().enumerate() {
-        let occupied = word::popcount(&sc.layers[0]);
-        let cell = (2 * sc.half_pc * 1000 / SIDE) as u64;
+    for depth in [5, 7, 9, 11, 13] {
+        let (mut n, mut lit) = (0, 0);
+        for p in Sky::around_sun(depth) {
+            n += sky.region(p, depth).len() as u64;
+            lit += monade_core::word::popcount(&sky.dense(p, depth));
+        }
         let _ = writeln!(
             out,
-            "scale {root}: cube of {} pc, cell {}: {} stars inside, {} cells lit, {} sharing a cell; mean error {}, max {}; naked eye {}",
-            2 * sc.half_pc,
-            pc(cell),
-            grouped(sc.inside),
-            grouped(occupied),
-            grouped(sc.shared),
-            pc(sc.error_sum / sc.inside.max(1)),
-            pc(sc.error_max),
-            grouped(word::popcount(&sc.layers[1]))
+            "  depth {depth:>2}: 8 regions of {} meeting at the Sun (a cube of {}), cell {}: {} stars, {} cells lit",
+            pc(side_milli(depth)),
+            pc(2 * side_milli(depth)),
+            pc(side_milli(depth + 8)),
+            grouped(n),
+            grouped(lit),
         );
     }
     out
@@ -329,143 +355,33 @@ fn esc(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// The map: one self-contained HTML page with a rotating 3D view of every scale.
-pub fn html(stars: &[Star], scales: &[Scale], source: &str) -> String {
-    let mut data = String::from("[");
-    let mut table = String::new();
-    for (root, sc) in scales.iter().enumerate() {
-        let pts = points(sc, root as u32);
-        let flat: Vec<u8> = pts.iter().flatten().copied().collect();
-        let names: Vec<String> = sc
-            .names
-            .iter()
-            .map(|(n, (x, y, z))| {
-                format!(
-                    "[{},{x},{y},{z}]",
-                    serde_json::to_string(n).unwrap_or_default()
-                )
-            })
-            .collect();
-        let cell = (2 * sc.half_pc * 1000 / SIDE) as u64;
-        let _ = write!(
-            data,
-            "{{\"half\":{},\"cell\":\"{}\",\"n\":{},\"pts\":\"{}\",\"names\":[{}]}},",
-            sc.half_pc,
-            pc(cell),
-            pts.len(),
-            base64(&flat),
-            names.join(",")
-        );
-        let oct = octants(sc, root as u32);
-        let _ = write!(
-            table,
-            "<tr><td>{root}</td><td>{} pc</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class=\"mono\">{}</td></tr>",
-            2 * sc.half_pc,
-            pc(cell),
-            grouped(sc.inside),
-            grouped(pts.len() as u64),
-            grouped(sc.shared),
-            pc(sc.error_sum / sc.inside.max(1)),
-            grouped(word::popcount(&sc.layers[1])),
-            oct.iter().map(|o| grouped(*o)).collect::<Vec<_>>().join(" · ")
-        );
-    }
-    data.push(']');
-    PAGE.replace("{{DATA}}", &data)
-        .replace("{{TABLE}}", &table)
+/// The map: one self-contained HTML page (3D view at any radius, and the
+/// Hertzsprung–Russell diagram), the stars decoded from their codes.
+pub fn html(stars: &[Star], sky: &Sky, source: &str) -> String {
+    let codes: Vec<u8> = sky.codes.iter().flat_map(|c| c.to_le_bytes()).collect();
+    let info: Vec<u8> = sky.info.iter().flat_map(|i| i.to_le_bytes()).collect();
+    let names: Vec<String> = sky
+        .names
+        .iter()
+        .map(|(i, n)| format!("[{i},{}]", serde_json::to_string(n).unwrap_or_default()))
+        .collect();
+    PAGE.replace("{{CODES}}", &base64(&codes))
+        .replace("{{INFO}}", &base64(&info))
+        .replace("{{NAMES}}", &format!("[{}]", names.join(",")))
         .replace("{{STARS}}", &grouped(stars.len() as u64))
+        .replace("{{KEPT}}", &grouped(sky.codes.len() as u64))
+        .replace("{{BYTES}}", &grouped(8 * sky.codes.len() as u64))
+        .replace("{{OUTSIDE}}", &grouped(sky.outside))
+        .replace("{{ERROR}}", &pc(sky.error_max))
         .replace("{{SOURCE}}", &esc(source))
 }
 
-const PAGE: &str = r##"<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Monade · stars</title><style>
-:root{--bg:#0b0b0d;--fg:#e6e6e6;--mute:#8a8a8a;--line:#26262a}
-*{box-sizing:border-box}
-body{margin:0;padding:24px 32px;background:var(--bg);color:var(--fg);font:13px/1.6 system-ui,'Segoe UI',Helvetica,Arial,sans-serif;font-variant-numeric:tabular-nums}
-h1{font-size:16px;font-weight:600;margin:0 0 4px;letter-spacing:.04em}
-h2{font-size:13px;font-weight:600;margin:24px 0 8px;color:var(--mute);text-transform:uppercase;letter-spacing:.08em}
-.meta{color:var(--mute)} .mono{font-family:ui-monospace,Consolas,monospace}
-table{border-collapse:collapse} td,th{padding:3px 12px 3px 0;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
-th{color:var(--mute);font-weight:600}
-.bar{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:8px 0}
-select,button{background:#18181c;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 8px;font:inherit}
-canvas{display:block;background:#000;border:1px solid var(--line);border-radius:4px;cursor:grab;max-width:100%}
-.intro{max-width:860px}
-.key span{display:inline-block;width:10px;height:10px;border-radius:5px;margin:0 4px 0 10px}
-</style></head><body>
-<h1>MONADE · STARS</h1>
-<div class="meta">{{STARS}} stars read · source: {{SOURCE}}</div>
-<p class="intro">Each scale is one Monade of 2 MB: a cube of 256 x 256 x 256 cells around the Sun, one bit per cell. A star lights the bit of its cell; the octal address of the cell (8 base-8 digits) is its place in the cube. The points drawn here are read back from the Monade itself, not from the catalog. The colours and the naked-eye filter are further Monadi with the same addresses: layers of the same map.</p>
-<div class="bar">
-<label>Scale <select id="scale"></select></label>
-<label>Show <select id="layer"><option value="0">every star</option><option value="1">naked eye only</option></select></label>
-<label><input type="checkbox" id="spin" checked> rotate</label>
-<label><input type="checkbox" id="labels" checked> names</label>
-<button id="reset">reset view</button>
-<span class="meta" id="info"></span>
-</div>
-<canvas id="c" width="1000" height="680"></canvas>
-<div class="meta key">drag to turn · wheel to zoom ·
-<span style="background:#9bb0ff"></span>blue<span style="background:#f8f7ff"></span>white<span style="background:#fff4ea"></span>yellow<span style="background:#ffd2a1"></span>orange<span style="background:#ffb56b"></span>red<span style="background:#777"></span>no colour<span style="background:#ffd700"></span>the Sun</div>
-<h2>The four Monadi</h2>
-<table><tr><th>scale</th><th>cube</th><th>cell</th><th>stars inside</th><th>cells lit</th><th>sharing a cell</th><th>mean error</th><th>naked eye</th><th>lit cells per octant (first digit 0–7)</th></tr>{{TABLE}}</table>
-<p class="meta intro">Star data: <a href="https://github.com/astronexus/HYG-Database" style="color:inherit">HYG Database</a> by David Nash (astronexus.com), licensed under <a href="https://creativecommons.org/licenses/by-sa/4.0/" style="color:inherit">CC BY-SA 4.0</a>. Changed here: positions quantised to cells of a 256³ cube, magnitude and colour reduced to layers of one bit. This map, as adapted material, is shared under the same licence.</p>
-<p class="meta intro">Mean error: average distance between a star and the centre of its cell, the price of one bit per cell. Sharing a cell: stars that fell where another star already was (one bit cannot count them; counters will, in step 5). Octants: the 8 parts of the cube, the first digit of every address.</p>
-<script>
-const S={{DATA}};
-const COL=[[155,176,255],[248,247,255],[255,244,234],[255,210,161],[255,181,107]];
-const c=document.getElementById('c'),g=c.getContext('2d'),W=c.width,H=c.height;
-const sel=document.getElementById('scale'),lay=document.getElementById('layer'),info=document.getElementById('info');
-S.forEach((s,i)=>{const o=document.createElement('option');o.value=i;o.textContent=(2*s.half)+' pc (cell '+s.cell+')';sel.appendChild(o);});
-sel.value=1;
-function dec(b){const s=atob(b),a=new Uint8Array(s.length);for(let i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return a;}
-S.forEach(s=>s.a=dec(s.pts));
-let yaw=0.6,pitch=0.35,zoom=1,drag=null;
-function draw(){
- const s=S[+sel.value],a=s.a,only=+lay.value===1;
- const img=g.createImageData(W,H),d=img.data;
- const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
- const f=zoom*H*1.45,D=640,sz=s.n<5000?2:1;let shown=0;
- function proj(x,y,z){x-=127.5;y-=127.5;z-=127.5;
-  const x1=cy*x-sy*y,y1=sy*x+cy*y;const y2=cp*y1-sp*z,z2=sp*y1+cp*z;
-  const w=D+y2;if(w<20)return null;return [W/2+f*x1/w,H/2-f*z2/w,w];}
- for(let i=0;i<a.length;i+=4){
-  const fl=a[i+3];if(only&&!(fl&1))continue;
-  const p=proj(a[i],a[i+1],a[i+2]);if(!p)continue;
-  const px=p[0]|0,py=p[1]|0;if(px<0||py<0||px>=W||py>=H)continue;
-  let k=-1;for(let b=1;b<6;b++)if(fl&(1<<b)){k=b-1;break;}
-  const col=k<0?[119,119,119]:COL[k];const br=(fl&1)?1:0.55;
-  for(let dy=0;dy<sz;dy++)for(let dx=0;dx<sz;dx++){if(px+dx>=W||py+dy>=H)continue;
-   const o=((py+dy)*W+px+dx)*4;d[o]=Math.min(255,d[o]+col[0]*br);d[o+1]=Math.min(255,d[o+1]+col[1]*br);d[o+2]=Math.min(255,d[o+2]+col[2]*br);d[o+3]=255;}
-  shown++;}
- for(let i=3;i<d.length;i+=4)if(!d[i])d[i]=255;
- g.putImageData(img,0,0);
- const sun=proj(128,128,128);
- if(sun){g.strokeStyle='#ffd700';g.beginPath();g.arc(sun[0],sun[1],5,0,7);g.stroke();}
- g.strokeStyle='rgba(255,255,255,0.12)';g.beginPath();
- const E=[[0,0,0],[256,0,0],[256,256,0],[0,256,0]];
- for(const zz of [0,256]){E.forEach((e,j)=>{const p=proj(e[0],e[1],zz),q=proj(E[(j+1)%4][0],E[(j+1)%4][1],zz);if(p&&q){g.moveTo(p[0],p[1]);g.lineTo(q[0],q[1]);}});}
- E.forEach(e=>{const p=proj(e[0],e[1],0),q=proj(e[0],e[1],256);if(p&&q){g.moveTo(p[0],p[1]);g.lineTo(q[0],q[1]);}});
- g.stroke();
- if(document.getElementById('labels').checked){g.fillStyle='#bbb';g.font='11px system-ui,sans-serif';
-  s.names.forEach(n=>{const p=proj(n[1],n[2],n[3]);if(p)g.fillText(n[0],p[0]+6,p[1]-4);});}
- info.textContent=shown.toLocaleString()+' cells drawn · cube '+(2*s.half)+' pc · cell '+s.cell;
-}
-function tick(){if(document.getElementById('spin').checked&&!drag){yaw+=0.004;draw();}requestAnimationFrame(tick);}
-c.addEventListener('mousedown',e=>{drag=[e.clientX,e.clientY];c.style.cursor='grabbing';});
-addEventListener('mouseup',()=>{drag=null;c.style.cursor='grab';});
-addEventListener('mousemove',e=>{if(!drag)return;yaw+=(e.clientX-drag[0])*0.006;pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.clientY-drag[1])*0.006));drag=[e.clientX,e.clientY];draw();});
-c.addEventListener('wheel',e=>{e.preventDefault();zoom*=e.deltaY<0?1.1:1/1.1;draw();},{passive:false});
-document.getElementById('reset').onclick=()=>{yaw=0.6;pitch=0.35;zoom=1;draw();};
-[sel,lay,document.getElementById('labels')].forEach(x=>x.onchange=draw);
-draw();tick();
-</script></body></html>
-"##;
+const PAGE: &str = include_str!("stars.html");
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use monade_core::address::Address;
 
     #[test]
     fn decimals_without_floating_point() {
@@ -478,41 +394,87 @@ mod tests {
     }
 
     #[test]
-    fn cells() {
-        let half = 16_000;
-        assert_eq!(cell([0, 0, 0], half), Some((128, 128, 128)));
-        assert_eq!(cell([-16_000, -16_000, -16_000], half), Some((0, 0, 0)));
-        assert_eq!(cell([15_999, 0, 0], half), Some((255, 128, 128)));
-        assert_eq!(cell([16_000, 0, 0], half), None);
-        assert_eq!(cell([-16_001, 0, 0], half), None);
+    fn codes_are_octal_addresses() {
+        // The low 24 bits of a code are the address of a cell in a 2 MB Monade.
+        for (x, y, z) in [(0, 0, 0), (255, 0, 7), (13, 200, 99), (255, 255, 255)] {
+            let a = Address::from_point(0, Size::THOUGHT, (x, y, z), 8).unwrap();
+            assert_eq!(
+                interleave(u64::from(x), u64::from(y), u64::from(z)),
+                a.bit_offset()
+            );
+        }
+        for code in [
+            0,
+            1,
+            0o777,
+            0x7fff_ffff_ffff_ffff,
+            0x1234_5678_9abc_def0 >> 1,
+        ] {
+            let (x, y, z) = deinterleave(code);
+            assert_eq!(interleave(x, y, z), code);
+        }
     }
 
     #[test]
-    fn build_and_read_back() {
-        let star = |x, mag, ci, name: &str| Star {
-            pos: [x, 0, 0],
+    fn positions_are_exact() {
+        assert_eq!(
+            code_of([0, 0, 0]).map(deinterleave),
+            Some((1 << 20, 1 << 20, 1 << 20))
+        );
+        assert_eq!(code_of([HALF_MILLI, 0, 0]), None);
+        assert_eq!(
+            code_of([-HALF_MILLI, 0, 0]).map(|c| deinterleave(c).0),
+            Some(0)
+        );
+        let p = [1_302_000, -2_047, 7_999_999];
+        let c = centre(code_of(p).unwrap());
+        assert!((0..3).all(|i| (p[i] - c[i]).abs() <= CELL_MILLI / 2));
+    }
+
+    #[test]
+    fn regions_and_dense_monadi() {
+        let star = |pos, mag, ci, name: &str| Star {
+            pos,
             mag: Some(mag),
+            absmag: None,
             ci: Some(ci),
             name: name.into(),
         };
         let stars = [
-            star(0, 1000, 600, "Sun-like"),
-            star(1, 9000, -100, ""),
-            star(5_000, 3000, 1600, ""),
-            star(2_000_000, 0, 0, "far"),
+            star([1_000, 1_000, 1_000], 1000, 600, "a"),
+            star([1_001, 1_001, 1_001], 9000, -100, ""),
+            star([-5_000, 2_000, -300], 3000, 1600, ""),
+            star([4_000_000, 0, 0], 0, 0, "far"),
+            star([90_000_000, 0, 0], 0, 0, "outside"),
         ];
-        let scales = build(&stars);
-        let s0 = &scales[0];
-        assert_eq!(s0.inside, 3);
-        assert_eq!(s0.shared, 1, "the first two share the centre cell");
-        let pts = points(s0, 0);
-        assert_eq!(pts.len(), 2);
-        assert!(pts.iter().any(|p| p[..3] == [128, 128, 128]));
-        assert_eq!(octants(s0, 0).iter().sum::<u64>(), 2);
-        assert_eq!(scales[3].inside, 3, "2 000 pc is outside every cube");
-        let page = html(&stars, &scales, "test");
-        assert!(page.contains("<canvas") && page.contains("Sun-like"));
-        assert!(summary(&stars, &scales).contains("4 stars read"));
+        let sky = Sky::build(&stars);
+        assert_eq!((sky.codes.len(), sky.outside, sky.shared), (4, 1, 1));
+        assert!(sky.codes.windows(2).all(|w| w[0] <= w[1]));
+        assert!(sky.error_max <= 7);
+        assert_eq!(sky.region(0, 0), 0..4);
+        // The 8 regions meeting at the Sun hold every star within half their side.
+        for depth in [1, 5, 9, 13] {
+            let n: usize = Sky::around_sun(depth)
+                .iter()
+                .map(|p| sky.region(*p, depth).len())
+                .sum();
+            let half = side_milli(depth) as i64;
+            let inside = stars
+                .iter()
+                .filter(|s| s.pos.iter().all(|v| -half <= *v && *v < half))
+                .count();
+            assert_eq!(n, inside, "depth {depth}");
+        }
+        // A dense Monade lights one cell per distinct star cell of its region.
+        let lit: u64 = Sky::around_sun(5)
+            .iter()
+            .map(|p| monade_core::word::popcount(&sky.dense(*p, 5)))
+            .sum();
+        assert_eq!(lit, 2, "the two close stars share a cell at this depth");
+        assert_eq!(info(&stars[0]) & 511, 110); // B-V 0.6 → 110 hundredths from -0.5
+        let page = html(&stars, &sky, "test");
+        assert!(page.contains("<canvas") && page.contains("\"a\""));
+        assert!(summary(&stars, &sky).contains("5 stars read"));
     }
 
     #[test]

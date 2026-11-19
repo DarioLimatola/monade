@@ -2,7 +2,7 @@
 //! of the universe).
 //!
 //! A small web page served **on this computer only** (127.0.0.1): nothing is
-//! reachable from the network. Six rooms; the first ones show what exists today
+//! reachable from the network. Seven rooms; the first ones show what exists today
 //! (the checks, the stars, the foundations), the others say which step brings them.
 //! Every page is built by [`respond`] (and every command by [`command`]), so they
 //! can be tested without a server; [`serve`] only moves bytes.
@@ -76,10 +76,10 @@ const ROOMS: [(&str, &str, &str, &str); 7] = [
         "step 6 (the blackboard)",
     ),
     (
-        "memory",
-        "Memory",
-        "any Monade drawn as a cube, certainty as colour",
-        "a later step (the viewer, test 17)",
+        "map",
+        "Map",
+        "the inside of the mind in 3D: Monadi, words, bindings, sentences and their references; any point drawn as a cube of bits",
+        "",
     ),
     (
         "foundations",
@@ -178,8 +178,18 @@ fn state(ctx: &Ctx) -> String {
 
 /// The answer to a request for `path`; `now` is the time shown in the report.
 pub fn respond(path: &str, ctx: &Ctx, now: &str) -> Reply {
+    let full = path;
     let path = path.split(['?', '#']).next().unwrap_or("/");
     match path {
+        "/map" => reply(200, HTML, crate::map::page()),
+        "/api/map" => {
+            let text = crate::map::query(full, "s").unwrap_or_else(|| crate::map::DEFAULT.to_string());
+            let space = crate::store::load_specs(&ctx.dir)
+                .ok()
+                .and_then(|s| monade_core::space::Space::from_specs(&s).ok())
+                .unwrap_or_else(monade_core::space::Space::genesis);
+            reply(200, "application/json", crate::map::graph(&space, &text).to_string())
+        }
         "/" | "/index.html" => reply(200, HTML, index(env!("CARGO_PKG_VERSION"))),
         "/api/state" => reply(200, "application/json", state(ctx)),
         "/mind" => match runs::load_all(&ctx.runs) {
@@ -479,6 +489,10 @@ mod tests {
         assert!(respond("/foundations", &c, "now").body.contains("POINT 0"));
         assert_eq!(respond("/nothing", &c, "now").status, 404);
         assert_eq!(respond("/mind?x=1", &c, "now").status, 200);
+        let m = respond("/api/map?s=il+cane+dorme", &c, "now");
+        let v: serde_json::Value = serde_json::from_str(&m.body).unwrap();
+        assert_eq!(v["sentences"], 1);
+        assert!(respond("/map", &c, "now").body.contains("il cane dorme"));
     }
 
     #[test]

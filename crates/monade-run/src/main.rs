@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod check;
+mod map;
 mod report;
 mod runs;
 mod specchio;
@@ -37,8 +38,8 @@ USAGE
   show     point 0 and the specifications
   check    verifies the Monade, says what it verified, saves the run in R
   report   writes one HTML page (F) from every run in R; open it in a browser
-  stars    puts the stars of a catalog (HYG CSV) into four 2 MB Monadi and writes
-           a 3D map (F, default stars.html)
+  stars    turns the stars of a catalog (HYG CSV) into octal addresses (exact, only
+           the stars stored) and writes a 3D map (F, default stars.html)
   specchio the interface: serves it on this computer only (127.0.0.1, port P,
            default 8088) and opens the browser; Ctrl+C stops it
   tools    runs the Python tools with uv: `tools doctor`, `tools card new ...`
@@ -395,20 +396,20 @@ fn report_command(a: &Args, now: &str) -> Result<String, CliError> {
 fn stars_command(a: &Args) -> Result<String, CliError> {
     let catalog = PathBuf::from(a.required("catalog")?);
     let list = stars::read_catalog(&catalog).map_err(|e| CliError::Usage(e.to_string()))?;
-    let scales = stars::build(&list);
+    let sky = stars::Sky::build(&list);
     let source = catalog
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let page = stars::html(
         &list,
-        &scales,
+        &sky,
         &format!("{source} (HYG Database, astronexus.com, CC BY-SA 4.0)"),
     );
     let out = PathBuf::from(a.flag("out").unwrap_or("stars.html"));
     std::fs::write(&out, page).map_err(|e| CliError::Store(StoreError::Io(out.clone(), e)))?;
     Ok(format!(
         "{}\nmap written to {}\nopen it in a browser (double click)\n",
-        stars::summary(&list, &scales),
+        stars::summary(&list, &sky),
         out.display()
     ))
 }
