@@ -11,7 +11,7 @@ and the packages, the same on every machine.
 uv run --project tools monade-tools doctor           what the tools see (Python, data folder, disk, GPU)
 uv run --project tools monade-tools card new ...     write card.json for a folder of data
 uv run --project tools monade-tools card check F     check a card and its files
-uv run --project tools monade-tools crawl run       the crawler: reads the seed authors (tools/seeds.toml)
+uv run --project tools monade-tools crawl run       the crawler: from the starting authors (<data>/biblioteca/seeds.toml) along their links
 uv run --project tools monade-tools crawl status    what the library holds
 uv run --project tools python -m unittest discover -s tools/tests
 ```

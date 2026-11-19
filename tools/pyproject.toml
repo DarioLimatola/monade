@@ -4,7 +4,7 @@
 #   uv run --project tools monade-tools doctor
 [project]
 name = "monade-tools"
-version = "0.6.0"
+version = "0.6.1"
 description = "Tools of the Monade: dataset cards, downloads, baselines. Never inside the mind."
 requires-python = ">=3.11"  # uv uses .python-version (3.13): wheels exist for every package
 dependencies = [

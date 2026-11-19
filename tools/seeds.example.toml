@@ -1,0 +1,15 @@
+# Example of the starting authors of the crawler. The real list is private: it lives
+# in the data folder, <data>/biblioteca/seeds.toml, created from this example on the
+# first run; edit it there.
+#
+# `search` = the name looked up on Wikidata; `lang` = the languages the author wrote
+# in (it, de, en): only texts in these languages are taken, no translations. Once the
+# crawler has chosen a Wikidata item, it writes it in seeds.lock.json: check it, and
+# pin it here with `qid = "Q..."` if the choice was wrong.
+#
+# The starting authors are only the beginning: the crawler follows their links
+# (influences, in both directions) to other authors and texts.
+
+[[author]]
+search = "Dante Alighieri"
+lang = ["it"]

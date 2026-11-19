@@ -1,18 +1,27 @@
-"""The crawler v0: from the seed authors to clean texts the mind can read.
+"""The crawler: from the starting authors, along their links, to clean texts the mind can read.
 
-For each seed author:
-1. find the author on Wikidata (or use the pinned id), check it is a person;
-2. **licence gate**: take the author only if dead for more than 70 years (public domain
-   in the EU on 1 January after 70 full years); otherwise refuse and log why;
-3. record who influenced whom (edges of the reference graph);
-4. find the author's works that have a Wikisource page in the author's own languages
-   (no translations), at most `max_works` per author;
+The starting authors (the seeds) are only the beginning. Each author taken adds to a
+**frontier** the people linked to it on Wikidata (who influenced it, and whom it
+influenced); every run goes on from the frontier, nearest links first, and never
+starts again from the seeds. For each author reached:
+
+1. find it on Wikidata (seeds by name or pinned id; frontier by id), check it is a person;
+2. **licence gate**: take it only if dead for more than 70 years (public domain in the
+   EU on 1 January after 70 full years), and only if it wrote in a language of the
+   library (it, de, en); otherwise refuse once and log why;
+3. record the links (edges of the reference graph) and extend the frontier;
+4. find its works with a Wikisource page in its own languages (no translations), at
+   most `max_works` per author;
 5. fetch each work (main page and its chapters), extract clean paragraphs, write them.
+
+Limits: a time budget per run, a depth of links, and a ceiling on the size of the
+library on disk (`max_gb`, default 64).
 
 Everything is written under `<data>/biblioteca/`:
 
+    seeds.toml   the starting authors (private: kept in the data folder, not in the repo)
     texts/<lang>/<lang>-<work>.jsonl   one paragraph per line: {"page", "i", "text"}
-    authors.jsonl  works.jsonl  edges.jsonl  refused.jsonl   the tables
+    authors.jsonl  works.jsonl  edges.jsonl  refused.jsonl  frontier.jsonl   the tables
     lessons.jsonl  the queue of works for the mind (read from step 6b)
     seeds.lock.json  which Wikidata item each seed became (check it)
     crawl.log  card.json  cache/
@@ -25,6 +34,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import shutil
 import time
 import tomllib
 from pathlib import Path
@@ -84,6 +94,16 @@ class Library:
         return True
 
 
+def seeds_file(root: Path, example: Path) -> Path:
+    """The starting authors: `<library>/seeds.toml` (private, in the data folder). The
+    first time, it is created from the example in the repository, to be edited."""
+    path = root / "seeds.toml"
+    if not path.is_file():
+        root.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(example, path)
+    return path
+
+
 def read_seeds(path: Path) -> list[dict]:
     """The seed authors: [{search, lang, qid?}]."""
     with open(path, "rb") as f:
@@ -119,6 +139,12 @@ class Budget:
 
     def over(self) -> bool:
         return time.monotonic() > self.deadline
+
+
+def library_bytes(lib: Library) -> int:
+    """Size of the texts on disk."""
+    texts = lib.root / "texts"
+    return sum(p.stat().st_size for p in texts.rglob("*.jsonl")) if texts.is_dir() else 0
 
 
 def crawl_work(fetch: Fetcher, lib: Library, author: str, w: dict, max_pages: int) -> dict | None:
@@ -165,6 +191,27 @@ def crawl_work(fetch: Fetcher, lib: Library, author: str, w: dict, max_pages: in
     return row
 
 
+def next_targets(lib: Library, seeds: list[dict], max_depth: int):
+    """What to visit next: seeds not yet resolved, then the frontier by depth (nearest
+    links first), skipping every author already taken or refused."""
+    lock = {}
+    lp = lib.path("seeds.lock.json")
+    if lp.is_file():
+        lock = json.loads(lp.read_text(encoding="utf-8"))
+    seen = {a["qid"] for a in lib.rows("authors.jsonl")} | {r["what"] for r in lib.rows("refused.jsonl")}
+    for s in seeds:
+        q = s.get("qid") or lock.get(s["search"], {}).get("qid")
+        if q is None or q not in seen:
+            yield {"seed": s, "depth": 0}
+    frontier = sorted(lib.rows("frontier.jsonl"), key=lambda f: f["depth"])
+    queued = set()
+    for f in frontier:
+        if f["depth"] > max_depth or f["qid"] in seen or f["qid"] in queued:
+            continue
+        queued.add(f["qid"])
+        yield {"qid": f["qid"], "depth": f["depth"], "label": f.get("label", "")}
+
+
 def run(
     seeds_path: Path,
     root: Path,
@@ -172,6 +219,9 @@ def run(
     max_works: int = 8,
     max_pages: int = 200,
     minutes: float = 30,
+    max_depth: int = 3,
+    max_links: int = 16,
+    max_gb: float = 64,
     fetch: Fetcher | None = None,
     year: int | None = None,
 ) -> dict:
@@ -180,50 +230,90 @@ def run(
     fetch = fetch or Fetcher(root / "cache")
     year = year or _dt.date.today().year
     budget = Budget(minutes)
+    max_bytes = int(max_gb * 1024**3)
     done = lib.done_works()
-    known_authors = {a["qid"] for a in lib.rows("authors.jsonl")}
-    lock = {}
+    seeds = read_seeds(seeds_path)
+    lock_new: dict[str, dict] = {}
+    in_frontier = {f["qid"] for f in lib.rows("frontier.jsonl")}
     counts = {"authors": 0, "works": 0, "refused": 0}
-    lib.log(f"crawl start: {seeds_path}, max {max_works} works per author, {minutes} minutes")
-    for seed in read_seeds(seeds_path):
+    lib.log(f"crawl start: max {max_works} works per author, links up to depth {max_depth}, {minutes} minutes, {max_gb} GB")
+    tried: set[str] = set()  # targets attempted in this run (a network error is retried next run)
+
+    def key(t: dict) -> str:
+        return t["seed"]["search"] if "seed" in t else t["qid"]
+
+    while True:
+        # The frontier grows while we read: always take the nearest target not yet tried.
+        target = next((t for t in next_targets(lib, seeds, max_depth) if key(t) not in tried), None)
+        if target is None:
+            lib.log("nothing left to visit within the depth limit")
+            break
+        tried.add(key(target))
         if budget.over():
             lib.log("time budget over: stopping (the next run continues)")
             break
+        if library_bytes(lib) >= max_bytes:
+            lib.log(f"library at its ceiling ({max_gb} GB): stopping")
+            break
+        depth = target["depth"]
         try:
-            qid, person = resolve(fetch, seed)
+            if "seed" in target:
+                seed = target["seed"]
+                qid, person = resolve(fetch, seed)
+                if qid is None:
+                    if lib.refuse({"what": seed["search"], "why": "no person found on Wikidata"}):
+                        counts["refused"] += 1
+                    lib.log(f"{seed['search']}: no person found on Wikidata")
+                    continue
+                lock_new[seed["search"]] = {"qid": qid, "label": person["label"], "died": person["died"]}
+                langs = list(seed["lang"])
+            else:
+                qid = target["qid"]
+                found = wiki.parse_persons(fetch.get_json(wiki.sparql_url(wiki.person_query([qid]))))
+                if qid not in found:
+                    if lib.refuse({"what": qid, "label": target.get("label", ""), "why": "not a person on Wikidata"}):
+                        counts["refused"] += 1
+                    lib.log(f"{target.get('label') or qid}: not a person on Wikidata")
+                    continue
+                person = found[qid]
+                langs = person["langs"]
         except FetchError as e:
-            lib.log(f"{seed['search']}: network error, skipped this time ({e})")
+            lib.log(f"{target.get('label') or target.get('seed', {}).get('search')}: network error, retried next run ({e})")
             continue
-        if qid is None:
-            lib.refuse({"what": seed["search"], "why": "no person found on Wikidata"})
-            lib.log(f"{seed['search']}: no person found on Wikidata")
-            counts["refused"] += 1
-            continue
-        lock[seed["search"]] = {"qid": qid, "label": person["label"], "died": person["died"]}
+        label = person["label"]
+        why = None
         if not public_domain(person["died"], year):
             why = f"protected: died {person['died']}" if person["died"] else "no death date: may be alive"
-            lib.refuse({"what": qid, "label": person["label"], "why": why})
-            lib.log(f"{person['label']} ({qid}): refused, {why}")
-            counts["refused"] += 1
+        elif not langs:
+            why = "did not write in it, de or en"
+        if why:
+            if lib.refuse({"what": qid, "label": label, "why": why}):
+                counts["refused"] += 1
+            lib.log(f"{label} ({qid}): refused, {why}")
             continue
-        if qid not in known_authors:
-            lib.append(
-                "authors.jsonl",
-                {"qid": qid, "label": person["label"], "died": person["died"], "lang": seed["lang"], "search": seed["search"]},
-            )
-            for iq, il in person["influences"]:
-                lib.append("edges.jsonl", {"from": qid, "rel": "influenced_by", "to": iq, "from_label": person["label"], "to_label": il})
-            known_authors.add(qid)
+        lib.append("authors.jsonl", {"qid": qid, "label": label, "died": person["died"], "lang": langs, "depth": depth})
         counts["authors"] += 1
+        # Links: who influenced this author, and whom it influenced -> the frontier.
+        links = [(q, l, "influenced_by") for q, l in person["influences"]]
         try:
-            works = wiki.parse_works(fetch.get_json(wiki.sparql_url(wiki.works_query(qid, seed["lang"]))))
+            links += [(q, l, "influenced") for q, l in wiki.parse_influenced(
+                fetch.get_json(wiki.sparql_url(wiki.influenced_query(qid, max_links))))]
         except FetchError as e:
-            lib.log(f"{person['label']}: works not listed this time ({e})")
+            lib.log(f"{label}: influenced not listed this time ({e})")
+        for q, l, rel in links[: 2 * max_links]:
+            lib.append("edges.jsonl", {"from": qid, "rel": rel, "to": q, "from_label": label, "to_label": l})
+            if q not in in_frontier:  # recorded even beyond the depth limit: a later run may go deeper
+                lib.append("frontier.jsonl", {"qid": q, "label": l, "depth": depth + 1, "via": qid, "rel": rel})
+                in_frontier.add(q)
+        try:
+            works = wiki.parse_works(fetch.get_json(wiki.sparql_url(wiki.works_query(qid, langs))))
+        except FetchError as e:
+            lib.log(f"{label}: works not listed this time ({e})")
             continue
-        works = [w for w in works if w["lang"] in seed["lang"]][:max_works]
-        lib.log(f"{person['label']} ({qid}, died {person['died']}): {len(works)} works on Wikisource")
+        works = [w for w in works if w["lang"] in langs][:max_works]
+        lib.log(f"{label} ({qid}, died {person['died']}, depth {depth}): {len(works)} works on Wikisource")
         for w in works:
-            if budget.over():
+            if budget.over() or library_bytes(lib) >= max_bytes:
                 break
             work_id = f"{w['lang']}-{w['work']}"
             if work_id in done:
@@ -236,23 +326,24 @@ def run(
             if row:
                 done.add(work_id)
                 counts["works"] += 1
-                lib.append("edges.jsonl", {"from": qid, "rel": "wrote", "to": w["work"], "from_label": person["label"], "to_label": w["label"]})
+                lib.append("edges.jsonl", {"from": qid, "rel": "wrote", "to": w["work"], "from_label": label, "to_label": w["label"]})
                 lib.log(f"  {w['title']} [{w['lang']}]: {row['paragraphs']} paragraphs, {row['chars']} characters")
             else:
                 counts["refused"] += 1
                 lib.log(f"  {w['title']}: no text found")
-    if lock:
+    if lock_new:
         old = {}
         lp = lib.path("seeds.lock.json")
         if lp.is_file():
             old = json.loads(lp.read_text(encoding="utf-8"))
-        old.update(lock)
+        old.update(lock_new)
         lp.write_text(json.dumps(old, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     write_card(lib)
     counts["requests"] = fetch.requests
     counts["cached"] = fetch.cache_hits
     lib.log(
         f"crawl end: {counts['authors']} authors, {counts['works']} new works, {counts['refused']} refused, "
+        f"{len(list(next_targets(lib, seeds, max_depth)))} authors waiting in the frontier, "
         f"{fetch.requests} requests, {fetch.cache_hits} from cache"
     )
     return counts
@@ -281,24 +372,37 @@ def write_card(lib: Library) -> None:
     cards.write(card, lib.path("card.json"))
 
 
-def status(root: Path) -> str:
-    """A short summary of the library."""
+def status(root: Path, names: bool = False) -> str:
+    """A short summary of the library (author names only if `names`)."""
     lib = Library(root)
     works = lib.rows("works.jsonl")
     authors = lib.rows("authors.jsonl")
     refused = lib.rows("refused.jsonl")
+    frontier = {f["qid"] for f in lib.rows("frontier.jsonl")}
+    seen = {a["qid"] for a in authors} | {r["what"] for r in refused}
     by_lang: dict[str, int] = {}
     for w in works:
         by_lang[w["lang"]] = by_lang.get(w["lang"], 0) + w["chars"]
+    depths: dict[int, int] = {}
+    for a in authors:
+        depths[a.get("depth", 0)] = depths.get(a.get("depth", 0), 0) + 1
+    size = library_bytes(lib)
     lines = [
-        f"library    {root}",
-        f"authors    {len(authors)}: " + ", ".join(a["label"] for a in authors),
+        f"library    {root} ({size / 1024**2:.1f} MB of texts)",
+        "authors    "
+        + f"{len(authors)} taken (by distance from the start: "
+        + ", ".join(f"{d}: {n}" for d, n in sorted(depths.items()))
+        + ")",
+        f"frontier   {len(frontier - seen)} authors waiting",
         f"works      {len(works)}, paragraphs {sum(w['paragraphs'] for w in works)}",
         "characters " + (", ".join(f"{k} {v:,}".replace(",", " ") for k, v in sorted(by_lang.items())) or "0"),
-        f"refused    {len(refused)}" + ("".join(f"\n  - {r.get('label') or r['what']}: {r['why']}" for r in refused[-10:])),
+        f"refused    {len(refused)}",
         f"edges      {len(lib.rows('edges.jsonl'))}",
         f"lessons    {len(lib.rows('lessons.jsonl'))} queued for the mind",
     ]
+    if names:
+        lines.append("authors: " + ", ".join(a["label"] for a in authors))
+        lines += [f"refused: {r.get('label') or r['what']}: {r['why']}" for r in refused]
     lock = lib.path("crawl.lock")
     if lock.is_file():
         lines.append(f"running    since {lock.read_text(encoding='utf-8').strip()}")

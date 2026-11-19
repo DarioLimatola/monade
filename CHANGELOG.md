@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.1 — 2026-11-19
+
+- The crawler follows links: each author taken adds to a persistent frontier
+  (`frontier.jsonl`) the people linked to it on Wikidata (influenced by, and
+  influenced), with their distance from the start; every run goes on from the
+  frontier, nearest first, up to `--depth` (default 3), and never starts again from the
+  starting authors. Authors reached by a link get their languages from Wikidata
+  (P1412, P103) and pass the same gate (70 years; it, de or en).
+- The starting authors are private: `<data>/biblioteca/seeds.toml`, created from
+  `tools/seeds.example.toml` on the first run. Specchio and `crawl status` show counts
+  only (`crawl status --names` on request).
+- A ceiling on the texts on disk: `--max-gb`, default 64.
+
 ## 0.6.0 — 2026-11-19
 
 - The crawler v0 (`tools/`, `monade-tools crawl run | status`): from the seed authors

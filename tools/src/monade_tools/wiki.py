@@ -38,16 +38,40 @@ def search_ids(answer: dict) -> list[str]:
     return [x["id"] for x in answer.get("search", []) if "id" in x]
 
 
+#: Wikidata items of the languages the library reads.
+LANGUAGES = {"Q652": "it", "Q188": "de", "Q1860": "en"}
+
+
 def person_query(qids: list[str]) -> str:
-    """For each candidate: is it a human, its label, death year, influences."""
+    """For each candidate: is it a human, its label, death year, languages it wrote in,
+    who influenced it."""
     values = " ".join(f"wd:{q}" for q in qids)
-    return f"""SELECT ?p ?pLabel ?died ?infl ?inflLabel WHERE {{
+    return f"""SELECT ?p ?pLabel ?died ?lang ?infl ?inflLabel WHERE {{
   VALUES ?p {{ {values} }}
   ?p wdt:P31 wd:Q5 .
   OPTIONAL {{ ?p wdt:P570 ?died . }}
+  OPTIONAL {{ {{ ?p wdt:P1412 ?lang . }} UNION {{ ?p wdt:P103 ?lang . }} }}
   OPTIONAL {{ ?p wdt:P737 ?infl . }}
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "it,de,en". }}
 }}"""
+
+
+def influenced_query(qid: str, limit: int = 16) -> str:
+    """People influenced by `qid` (the other direction of the links), at most `limit`."""
+    return f"""SELECT ?x ?xLabel WHERE {{
+  ?x wdt:P737 wd:{qid} ; wdt:P31 wd:Q5 .
+  SERVICE wikibase:label {{ bd:serviceParam wikibase:language "it,de,en". }}
+}} LIMIT {limit}"""
+
+
+def parse_influenced(answer: dict) -> list[tuple[str, str]]:
+    """[(qid, label)] of an influenced_query answer."""
+    out = []
+    for row in answer.get("results", {}).get("bindings", []):
+        pair = (_qid(_value(row, "x")), _value(row, "xLabel"))
+        if pair not in out:
+            out.append(pair)
+    return out
 
 
 def works_query(qid: str, langs: list[str]) -> str:
@@ -71,21 +95,26 @@ def _qid(uri: str) -> str:
 
 
 def parse_persons(answer: dict) -> dict[str, dict]:
-    """qid -> {label, died (year or None), influences [(qid, label)]}."""
+    """qid -> {label, died (year or None), langs [it/de/en], influences [(qid, label)]}."""
     out: dict[str, dict] = {}
     for row in answer.get("results", {}).get("bindings", []):
         q = _qid(_value(row, "p"))
-        p = out.setdefault(q, {"label": _value(row, "pLabel"), "died": None, "influences": []})
+        p = out.setdefault(q, {"label": _value(row, "pLabel"), "died": None, "langs": [], "influences": []})
         died = _value(row, "died")
         if died:
             # "1832-03-22T00:00:00Z"; a negative year means BCE.
             year = int(died[: died.index("-", 1)])
             p["died"] = year if p["died"] is None else min(p["died"], year)
+        lang = LANGUAGES.get(_qid(_value(row, "lang")))
+        if lang and lang not in p["langs"]:
+            p["langs"].append(lang)
         infl = _value(row, "infl")
         if infl:
             pair = (_qid(infl), _value(row, "inflLabel"))
             if pair not in p["influences"]:
                 p["influences"].append(pair)
+    for p in out.values():
+        p["langs"].sort()
     return out
 
 

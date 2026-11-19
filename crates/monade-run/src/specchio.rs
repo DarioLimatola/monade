@@ -244,12 +244,12 @@ const COMMANDS: [(&str, &str, &str); 6] = [
     (
         "crawl",
         "Crawl",
-        "the crawler reads the seed authors in the background, for at most 30 minutes",
+        "the crawler follows the links between authors in the background, for at most 30 minutes",
     ),
     (
         "library",
         "Library",
-        "what the crawler has gathered: authors, works, refusals, lessons queued",
+        "what the crawler has gathered: counts of authors, works, refusals, lessons queued",
     ),
     (
         "stars",

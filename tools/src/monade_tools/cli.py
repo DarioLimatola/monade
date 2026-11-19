@@ -5,8 +5,8 @@
                           --languages it,en --dir FOLDER [--description D]
                           [--non-commercial] [--notes T]
     monade-tools card check CARD.json
-    monade-tools crawl run [--seeds tools/seeds.toml] [--max-works 8] [--minutes 30]
-    monade-tools crawl status
+    monade-tools crawl run [--max-works 8] [--minutes 30] [--depth 3] [--max-gb 64]
+    monade-tools crawl status [--names]
 """
 
 from __future__ import annotations
@@ -123,12 +123,16 @@ def crawl_run(a: argparse.Namespace) -> int:
         return 1
     lock.write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
     try:
+        example = Path(__file__).resolve().parents[2] / "seeds.example.toml"
+        seeds = Path(a.seeds) if a.seeds else crawl.seeds_file(root, example)
         crawl.run(
-            Path(a.seeds),
+            seeds,
             root,
             max_works=a.max_works,
             max_pages=a.max_pages,
             minutes=a.minutes,
+            max_depth=a.depth,
+            max_gb=a.max_gb,
             fetch=crawl.Fetcher(root / "cache", offline=a.offline),
         )
     except KeyboardInterrupt:
@@ -158,20 +162,23 @@ def main(argv: list[str] | None = None) -> int:
     chk.add_argument("card")
     cr = sub.add_parser("crawl", help="the crawler: authors and texts").add_subparsers(dest="action", required=True)
     run = cr.add_parser("run", help="read the seed authors from Wikidata and Wikisource")
-    run.add_argument("--seeds", default=str(Path(__file__).resolve().parents[2] / "seeds.toml"))
+    run.add_argument("--seeds", default="", help="default: <data>/biblioteca/seeds.toml")
     run.add_argument("--max-works", type=int, default=8)
     run.add_argument("--max-pages", type=int, default=200)
     run.add_argument("--minutes", type=float, default=30)
+    run.add_argument("--depth", type=int, default=3, help="how far to follow the links from the start")
+    run.add_argument("--max-gb", type=float, default=64, help="ceiling of the texts on disk")
     run.add_argument("--offline", action="store_true", help="only what is already in the cache")
     run.add_argument("--force", action="store_true", help="ignore the lock of another crawl")
-    cr.add_parser("status", help="what the library holds")
+    st = cr.add_parser("status", help="what the library holds")
+    st.add_argument("--names", action="store_true", help="also list the authors")
     a = p.parse_args(argv)
     if a.command == "doctor":
         return doctor()
     if a.command == "crawl":
         if a.action == "run":
             return crawl_run(a)
-        print(crawl.status(library_dir()))
+        print(crawl.status(library_dir(), names=a.names))
         return 0
     if a.action == "new":
         return card_new(a)

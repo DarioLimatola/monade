@@ -158,8 +158,10 @@ prereg/ ladder/ properties/ worlds/ benches/   empty for now
 5b-crawler. ✅ (v0.6.0) The crawler v0 (`tools/`): Wikidata (authors, influences,
    works) + Wikisource (texts); licence gate; polite fetch with cache; extraction;
    JSON Lines, card, queue of lessons (`docs/library.md`). Runs in parallel from here on.
+   v0.6.1: the walk along the links (persistent frontier, breadth first, depth 3),
+   private starting authors in the data folder, ceiling of 64 GB on disk.
    Next versions: more sources (Gutenberg mirror, Deutsches Textarchiv, open
-   textbooks), secondary literature and the reference walk, the language-model helper.
+   textbooks), secondary literature, the language-model helper (local, after D1).
 5c. Stars v2 within 100 pc (Gaia + HYG as two voices; exact Morton codes; the HR
     relation as the first learning test).
 5d. Fast and slow tallies; stochastic votes from the seed.
@@ -243,3 +245,7 @@ cargo run -p monade-run -- set-spec KEY VALUE --motive M
   Wikisource): the first real run is on the author's laptop. JSON Lines instead of
   Parquet for v0 (readable; read in Rust with `serde_json`). Gutenberg not used: it
   forbids automated access to its website.
+- **2026-11-19 · v0.6.1.** The crawler follows links (influences in both directions)
+  from a persistent frontier instead of starting again from the seeds; the starting
+  authors move to the data folder (private, not shown by the interface); `--max-gb 64`.
+  The crawler has no language model yet: it is rules and Wikidata links.
