@@ -18,9 +18,9 @@ by the same `record` module.
 - **The author** (the owner) designs and decides. Only he writes point 0 and the
   specifications, through `monade-run`.
 - The mind may propose, never write foundations.
-- The design lives in the claude.ai project "Tesseract": `claude/tesseract-structure-v5.md`
-  together with `claude/monade-parliament.md` (part 2) is the source of truth; a copy
-  of part 2 is in `docs/design/`.
+- The design lives in the claude.ai project "Tesseract": **structure v6** is the single
+  source of truth; its technical part is copied in `docs/design/structure-v6.md`
+  (with the parliament, part 2, in `docs/design/parliament.md`).
   Anything not confirmed there is labelled **Proposed**.
 - Wording: where a conventional technical term exists, use it (e.g. **seed**).
 
@@ -37,16 +37,23 @@ Italian, brief and essential; instructions for Windows.
    floating-point type even in comments (checked by `cargo all`).
 3. Reuse well-maintained open-source libraries where possible and efficient (a
    criterion of good programming). `monade-core` keeps few, vetted ones (today only the
-   official `blake3`). `monade-run` uses `serde` and `serde_json`.
+   official `blake3`). `monade-run` uses `serde`, `serde_json`, `csv` and `tiny_http`
+   (Specchio). The Python tools in `tools/` use `blake3`; they run outside the mind.
 4. Errors are values; library code never panics on bad input.
 5. Every public item has documentation and a runnable example.
 6. Small modules, one job each; tests next to the code.
 7. Measure before optimising: no fast path without a before/after number.
 8. Before every commit: `cargo all` (fmt, clippy `-D warnings`, no-float, tests in
    debug and release). CI runs the same command on Windows and Linux.
-9. This repository holds only the engine and its technical design.
+9. This repository holds only the engine and its technical design. Data lives outside
+   it (`MONADE_DATA`; default `D:\monade-data`, or `C:\monade-data` without a D: drive), described by dataset cards (`docs/data-cards.md`).
 10. Rust version pinned in `rust-toolchain.toml` (1.97.0): rustup uses it in this folder
     automatically. Raise it on purpose, in its own commit, after `cargo all` passes.
+11. Thresholds of new checks are computed before the first run (exact formula or a
+    simulation of the model, outside the repo) and written in the code with their
+    expected values; each check has a control that must fail. New checks are
+    appended before `foundations.read`, so the input stream of older checks, and
+    their numbers, never change.
 
 ## Structure
 
@@ -66,14 +73,18 @@ crates/
                       (sign; tie = 0), certainty, uncertain mask, residue, merge, decay
     src/oracle.rs     slow references + state_hash() (tests / feature `oracle`)
   monade-run/         CLI, the only writer of point 0 and specs
-    src/check.rs      `check`: 15 checks that say in words and numbers what they verified
+    src/check.rs      `check`: 16 checks that say in words and numbers what they verified
     src/runs.rs       run folders: runs/YYYYMMDD-HHMMSS/{run.json, results.jsonl}
     src/report.rs     `report`: one self-contained HTML page (history + latest run)
     src/stars.rs      first world: stars of a catalog in four 2 MB Monadi + 3D map
+    src/specchio.rs   Specchio, the interface: seven rooms served on 127.0.0.1 only;
+                      Commands runs a fixed list (check, doctor, show, stars)
   xtask/              `cargo all`: every check
+tools/                Python tools with uv (outside the mind): `monade-tools doctor`,
+                      dataset cards (`card new`, `card check`); tests in tools/tests
 fuzz/                 cargo-fuzz target for the log readers (Linux, nightly)
-runs/                 results of `check` (one folder per run, never overwritten)
-docs/                 design copied from the project (structure, part 2)
+runs/                 results of `check` (one folder per run, never overwritten; not in git)
+docs/                 design copied from the project (structure v6, parliament), data cards
 prereg/ ladder/ properties/ worlds/ benches/   empty for now
 .github/workflows/ci.yml   Windows + Linux; nightly fuzzing
 ```
@@ -111,10 +122,13 @@ prereg/ ladder/ properties/ worlds/ benches/   empty for now
 - **Majority:** a bit is set when more than half of the inputs are set; a tie gives 0.
 - **state_hash:** FNV-1a 64 over little-endian bytes; for comparing runs, not
   cryptographic. (The generated space, step 4, needs a cryptographic-quality hash.)
-- **Counters per bit (step 5, council session 11; Proposed until the author confirms):**
+- **Counters per bit (step 5, council sessions 11–12; Decided):**
   `Tally` owns one `i8` per bit, stored apart from the bits (64 counters of one word =
   one 64-byte cache line); symmetric limit ±127 (−128 unused), saturating, never
-  wrapping. Weights are integers 1 to 127. `is_exact()` is true while nothing was
+  wrapping. **Weights are 1, 2, 4 or 8** (`WEIGHTS`; Decided in session 12: more than
+  3 bits of weight add no accuracy, and small weights leave room for at least 15 votes
+  before saturation); the weight of a voice is its reliability, measured on verified
+  outcomes, never by agreement with the majority. `is_exact()` is true while nothing was
   clamped or decayed: then add/subtract are inverses and the reading is the majority.
   `decay(k)` is linear (the structure's sleep rule: subtract the same amount from all
   counters), never crosses 0, keeps the voices, and returns how many bits went back to
@@ -134,24 +148,26 @@ prereg/ ladder/ properties/ worlds/ benches/   empty for now
 3. ✅ Sizes, arenas, fast = slow.
 3b. ✅ `monade-run check` (readable results) + run folders + `monade-run report` (HTML).
 3c. ✅ Octal address (`address.rs`), with its check.
-4. ✅ Space: generated vectors from seed + id (Logos `GEN`); hash version 1 = BLAKE3
-   (official crate), keyed from the seed, context "monade space v1".
-5. ✅ Counters per bit (`tally.rs`): add, read by majority, certainty, residue, merge,
-   decay; checks `memory.reinforcement`, `memory.capacity`, `memory.residue` (test 19).
-6. Blackboard: Monade of 8^4 bits, voices bound to keys, consensus, residue (test 19).
-7. Ternary unit with homeostasis; rungs 0–4.
-8. Test 8 (determinism, across machines).
-9. Impulse with budget and metrology (test 6).
-10. Learning cycle with two levels (test 2).
-11. Composition and capacity, with PERM and MATCH (test 3).
-12. Logos v1: 64-bit instruction, interpreter of 8 primitives, budget, depth ≤ 8,
-    128-bit content hash, text ↔ binary form.
-13. Layers: XOR overlay virtualisation (depth ≤ 8, apply or discard); scars in a
-    Bloom filter.
-14. Sleep and quiet (test 5): consolidation, subsumption (test 18), compaction,
-    compiling upward.
-15. Calibration (4), atom (1), Peirce (7), Swadesh (20), communication (21); then
-    adapters and monitor (multi-dimensional map with forces, test 17).
+4. ✅ Space: generated vectors from seed + id (Logos `GEN`); hash version 1 = BLAKE3.
+   World: ✅ the stars (v0.4.2).
+5. ✅ Counters per bit (`tally.rs`); checks `memory.reinforcement`, `memory.capacity`,
+   `memory.residue` (test 19, first part).
+5b. ✅ (v0.5.1) Weights 1/2/4/8; tally golden hash; `memory.capacity_noisy`;
+   housekeeping; `tools/` with uv and dataset cards; Specchio skeleton.
+5b-crawler. The crawler v0 (`tools/`): discover, licence gate, polite fetch, extract,
+   cards, reference graph; runs in parallel from here on.
+5c. Stars v2 within 100 pc (Gaia + HYG as two voices; exact Morton codes; the HR
+    relation as the first learning test).
+5d. Fast and slow tallies; stochastic votes from the seed.
+6. Blackboard: 8 levels of 512 bits, voices with weights, consensus, residue,
+   redundancy between voices, niche reserve.
+6b. The gate: envelope, encoders, `PERM`, `MATCH`, lesson runner (refuses test data).
+D1 + D2. Language identification; analogies and small knowledge bases.
+6c. Persistence: snapshots, journal of lessons, tiles (positioned reads, BLAKE3).
+7. Ternary unit with homeostasis; rungs 0–4. Then D3–D5.
+8–15. Determinism across lessons; impulse and metrology; learning cycle on real
+   data; composition; Logos; layers; sleep; calibration, atom, Peirce, Swadesh,
+   communication; Specchio's rooms.
 
 ## Commands (Windows: PowerShell or cmd, same commands)
 
@@ -162,6 +178,10 @@ cargo run -p monade-run -- show              point 0 and specifications
 cargo run -p monade-run -- check             verify; results saved in runs/
 cargo run -p monade-run -- report            report.html from every run
 cargo run --release -p monade-run -- stars --catalog hygdata_v41.csv   stars.html
+cargo run --release -p monade-run -- specchio   the interface in the browser (Ctrl+C stops)
+Specchio.cmd                                     the same, with a double click (Windows)
+cargo run -p monade-run -- tools doctor          Python tools via uv (needs uv)
+uv run --project tools python -m unittest discover -s tools/tests   tests of the tools
 cargo run -p monade-run -- append-foundation --name N --text T --motive M
 cargo run -p monade-run -- set-spec KEY VALUE --motive M
 ```
@@ -201,3 +221,16 @@ cargo run -p monade-run -- set-spec KEY VALUE --motive M
 - **2026-11-18 · v0.4.2.** First world: the stars (HYG catalog, 119 626 stars) in four
   2 MB Monadi (cubes of 32, 128, 512, 2048 pc; cells of 0.125 to 8 pc), with layers,
   and a 3D map read back from the Monadi. No learning; uses the octal address only.
+- **2026-11-19 · v0.5.1.** Step 5b. Weights restricted to 1, 2, 4, 8 (Decided, council
+  12). Tally golden hash in a unit test and in `determinism.golden`. New check
+  `memory.capacity_noisy` (thresholds from the exact formula): 8 voices in 512 bits are
+  found 98% of the time when each voice has 10% noise, 85% with 20% (3.7 sigma), so the
+  blackboard needs fewer voices per 512 bits, or larger blocks, when voices are noisy.
+  `tools/` (Python, uv): `doctor`, dataset cards with BLAKE3. Specchio skeleton (six
+  rooms on 127.0.0.1). Design consolidated in `docs/design/structure-v6.md`; product
+  and council documents removed from the repository (they stay in the project).
+  16 checks. Next: the crawler v0, then 5c.
+- **2026-11-19 · v0.5.2.** v0.5.1 confirmed on Windows (16/16, same tally hash; uv and
+  the RTX 4060 seen by `doctor`). Specchio gains Commands (Verify, Doctor, Foundations,
+  Stars) and `Specchio.cmd`; data folder `C:\monade-data` without a D: drive. Advice:
+  keep the repository outside OneDrive (it locks and removes files while syncing).

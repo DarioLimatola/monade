@@ -205,6 +205,17 @@ pub fn tally_uncertain(counts: &[i64], threshold: i64) -> Vec<Word> {
         .collect()
 }
 
+/// Hash of the counters of a tally: FNV-1a over their bytes (two's complement),
+/// in order. For checking that two runs reached the same tally.
+pub fn counts_hash(counts: &[i8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for c in counts {
+        h ^= u64::from(c.to_le_bytes()[0]);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
 /// Hash of a state: FNV-1a over the little-endian bytes of every word.
 ///
 /// For checking that two runs reached the same state; not cryptographic.

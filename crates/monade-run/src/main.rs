@@ -9,6 +9,7 @@
 mod check;
 mod report;
 mod runs;
+mod specchio;
 mod stars;
 mod store;
 
@@ -28,6 +29,8 @@ USAGE
   monade-run check  [--runs R]
   monade-run report [--runs R] [--out F]
   monade-run stars  --catalog C [--out F]
+  monade-run specchio [--port P] [--runs R] [--open no]
+  monade-run tools ARGS...
   monade-run append-foundation --name N --text T --motive M [--state active|suspended] [--amends ID]
   monade-run set-spec KEY VALUE --motive M
 
@@ -36,6 +39,10 @@ USAGE
   report   writes one HTML page (F) from every run in R; open it in a browser
   stars    puts the stars of a catalog (HYG CSV) into four 2 MB Monadi and writes
            a 3D map (F, default stars.html)
+  specchio the interface: serves it on this computer only (127.0.0.1, port P,
+           default 8088) and opens the browser; Ctrl+C stops it
+  tools    runs the Python tools with uv: `tools doctor`, `tools card new ...`
+           (the arguments go to `monade-tools` unchanged; needs uv)
 
 OPTIONS
   --dir D    folder of origin.txt and specs.txt (default: foundations)
@@ -54,6 +61,8 @@ enum CliError {
     Runs(runs::RunError),
     /// Some checks failed; the text is the full output.
     ChecksFailed(String),
+    /// An external tool (uv, the Python tools) could not run or failed.
+    Tool(String),
 }
 
 impl std::fmt::Display for CliError {
@@ -63,6 +72,7 @@ impl std::fmt::Display for CliError {
             CliError::Store(e) => write!(f, "{e}"),
             CliError::Runs(e) => write!(f, "runs: {e}"),
             CliError::ChecksFailed(out) => write!(f, "some checks failed\n\n{out}"),
+            CliError::Tool(m) => write!(f, "{m}"),
         }
     }
 }
@@ -179,6 +189,9 @@ fn run(args: &[String], now: &str) -> Result<String, CliError> {
     let Some((command, rest)) = args.split_first() else {
         return Ok(USAGE.to_string());
     };
+    if command == "tools" {
+        return tools_command(rest);
+    }
     let a = Args::parse(rest)?;
     match command.as_str() {
         "show" => {
@@ -205,15 +218,23 @@ fn run(args: &[String], now: &str) -> Result<String, CliError> {
             a.only(&["catalog", "out"], 0)?;
             stars_command(&a)
         }
+        "specchio" => {
+            a.only(&["port", "runs", "open"], 0)?;
+            specchio_command(&a)
+        }
         "help" | "--help" | "-h" => Ok(USAGE.to_string()),
         other => Err(CliError::Usage(format!("unknown command `{other}`"))),
     }
 }
 
 fn show(a: &Args) -> Result<String, CliError> {
-    let dir = a.dir();
-    let origin = store::load_origin(&dir)?;
-    let specs = store::load_specs(&dir)?;
+    show_foundations(&a.dir())
+}
+
+/// Point 0 and the specifications in `dir`, as readable text.
+fn show_foundations(dir: &std::path::Path) -> Result<String, CliError> {
+    let origin = store::load_origin(dir)?;
+    let specs = store::load_specs(dir)?;
     let mut out = format!("Monade · foundations in {}\n\n", dir.display());
     let n = origin.entries().len();
     if n == 0 {
@@ -392,6 +413,50 @@ fn stars_command(a: &Args) -> Result<String, CliError> {
     ))
 }
 
+fn specchio_command(a: &Args) -> Result<String, CliError> {
+    let port: u16 = match a.flag("port") {
+        None => specchio::PORT,
+        Some(p) => p
+            .parse()
+            .map_err(|_| CliError::Usage(format!("--port {p} is not a port number")))?,
+    };
+    let open = match a.flag("open") {
+        None | Some("yes") => true,
+        Some("no") => false,
+        Some(o) => return Err(CliError::Usage(format!("--open {o}: yes or no"))),
+    };
+    let ctx = specchio::Ctx {
+        dir: a.dir(),
+        runs: a.runs(),
+        stars: PathBuf::from("stars.html"),
+    };
+    specchio::serve(&ctx, port, open).map_err(CliError::Usage)?;
+    Ok(String::new())
+}
+
+/// Runs `uv run --project tools monade-tools ARGS` and returns what it printed.
+fn tools_command(args: &[String]) -> Result<String, CliError> {
+    let out = std::process::Command::new("uv")
+        .args(["run", "--quiet", "--project", "tools", "monade-tools"])
+        .args(args)
+        .output()
+        .map_err(|e| {
+            CliError::Tool(format!(
+                "cannot start uv ({e}).\nInstall it: powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"\nthen open a new terminal in the repository folder."
+            ))
+        })?;
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    if out.status.success() {
+        Ok(text)
+    } else {
+        Err(CliError::Tool(format!(
+            "the tools ended with {}\n{text}",
+            out.status
+        )))
+    }
+}
+
 /// The current time (UTC), `YYYY-MM-DDTHH:MM:SSZ`.
 fn now() -> String {
     let secs = SystemTime::now()
@@ -512,7 +577,7 @@ mod tests {
         let mut a = args(&["check", "--runs"], &d);
         a.insert(2, r.display().to_string());
         let out = run(&a, "2026-11-18T18:10:05Z").unwrap();
-        assert!(out.contains("15 of 15 passed"), "{out}");
+        assert!(out.contains("16 of 16 passed"), "{out}");
         assert!(out.contains("word.xor.laws"));
         assert!(r.join("20261118-181005").join("results.jsonl").is_file());
         let rep = run(
@@ -528,7 +593,7 @@ mod tests {
         .unwrap();
         assert!(rep.contains("report of 1 runs"));
         let page = std::fs::read_to_string(&html).unwrap();
-        assert!(page.contains("all 15 checks passed"));
+        assert!(page.contains("all 16 checks passed"));
         let _ = std::fs::remove_dir_all(&r);
         let _ = std::fs::remove_file(&html);
     }

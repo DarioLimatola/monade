@@ -21,6 +21,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # fmt, clippy -D warnings, no floating point in monade-core, tests debug + release
       - run: cargo all
+      # The Python tools (outside the mind): uv installs Python and the packages.
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run --project tools python -m unittest discover -s tools/tests
 
   fuzz:
     name: fuzz (nightly, Linux)

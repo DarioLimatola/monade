@@ -10,6 +10,9 @@
 //! the counters stay near 0, which is measurable uncertainty and the base of the
 //! residue (what the majority discarded of a voice).
 //!
+//! A vote has a weight that is a power of 2: 1, 2, 4 or 8 ([`WEIGHTS`]); the weight
+//! of a voice is its reliability, measured elsewhere (never by consensus).
+//!
 //! Counters are one byte each (`i8`), symmetric and saturating at ±[`LIMIT`]:
 //! 64 counters, one word of bits, fill one 64-byte cache line. A counter never
 //! wraps around. While nothing has been clamped or decayed the tally is
@@ -31,6 +34,19 @@ use core::fmt;
 /// ```
 pub const LIMIT: i8 = 127;
 
+/// The allowed weights of a vote: powers of 2 from 1 to 8 (weight = 2^e, e = 0..3).
+///
+/// More than 3 bits of weight add no accuracy, and small weights leave the
+/// counters room for at least 15 votes before they saturate.
+///
+/// # Example
+///
+/// ```
+/// use monade_core::tally::WEIGHTS;
+/// assert_eq!(WEIGHTS, [1, 2, 4, 8]);
+/// ```
+pub const WEIGHTS: [u8; 4] = [1, 2, 4, 8];
+
 /// How many votes a tally holds and their total weight.
 ///
 /// # Example
@@ -40,8 +56,8 @@ pub const LIMIT: i8 = 127;
 /// use monade_core::tally::{Tally, Voices};
 /// use monade_core::word::Word;
 /// let mut t = Tally::new(Size::WORD);
-/// t.add_weighted(&[Word::new(1)], 3).unwrap();
-/// assert_eq!(t.voices(), Voices { count: 1, weight: 3 });
+/// t.add_weighted(&[Word::new(1)], 4).unwrap();
+/// assert_eq!(t.voices(), Voices { count: 1, weight: 4 });
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub struct Voices {
@@ -70,7 +86,7 @@ pub enum TallyError {
         /// Words given.
         found: usize,
     },
-    /// A weight outside 1 to 127.
+    /// A weight that is not 1, 2, 4 or 8.
     Weight(u8),
     /// Two tallies of different sizes.
     SizeMismatch {
@@ -89,7 +105,7 @@ impl fmt::Display for TallyError {
             TallyError::WrongLength { expected, found } => {
                 write!(f, "expected {expected} words, found {found}")
             }
-            TallyError::Weight(w) => write!(f, "weight {w} is not 1 to 127"),
+            TallyError::Weight(w) => write!(f, "weight {w} is not 1, 2, 4 or 8"),
             TallyError::SizeMismatch { expected, found } => write!(
                 f,
                 "tally of {} bits vs tally of {} bits",
@@ -218,9 +234,12 @@ impl Tally {
     /// use monade_core::tally::Tally;
     /// use monade_core::word::Word;
     /// let mut t = Tally::new(Size::WORD);
-    /// t.add_weighted(&[Word::ZERO], 127).unwrap();
+    /// for _ in 0..15 {
+    ///     t.add_weighted(&[Word::ZERO], 8).unwrap(); // -120
+    /// }
+    /// t.add_weighted(&[Word::ZERO], 4).unwrap(); // -124
     /// assert!(t.is_exact());
-    /// t.add(&[Word::ZERO]).unwrap(); // -128 is beyond the limit: clamped
+    /// t.add_weighted(&[Word::ZERO], 4).unwrap(); // -128 is beyond the limit: clamped
     /// assert!(!t.is_exact());
     /// assert_eq!(t.counts()[0], -127);
     /// ```
@@ -241,7 +260,7 @@ impl Tally {
     }
 
     fn check_weight(w: u8) -> Result<i16, TallyError> {
-        if (1..=LIMIT.unsigned_abs()).contains(&w) {
+        if WEIGHTS.contains(&w) {
             Ok(i16::from(w))
         } else {
             Err(TallyError::Weight(w))
@@ -281,7 +300,7 @@ impl Tally {
         self.add_weighted(v, 1)
     }
 
-    /// One vote of integer weight `w` (1 to 127): `+w` on the 1-bits, `-w` on
+    /// One vote of weight `w` (1, 2, 4 or 8): `+w` on the 1-bits, `-w` on
     /// the 0-bits. Counters saturate at ±127 and never wrap around.
     ///
     /// # Example
@@ -291,10 +310,11 @@ impl Tally {
     /// use monade_core::tally::{Tally, TallyError};
     /// use monade_core::word::Word;
     /// let mut t = Tally::new(Size::WORD);
-    /// t.add_weighted(&[Word::new(1)], 5).unwrap();
-    /// assert_eq!(t.counts()[0], 5);
+    /// t.add_weighted(&[Word::new(1)], 8).unwrap();
+    /// assert_eq!(t.counts()[0], 8);
     /// assert_eq!(t.add_weighted(&[Word::new(1)], 0), Err(TallyError::Weight(0)));
-    /// assert_eq!(t.add_weighted(&[Word::new(1)], 200), Err(TallyError::Weight(200)));
+    /// assert_eq!(t.add_weighted(&[Word::new(1)], 3), Err(TallyError::Weight(3)));
+    /// assert_eq!(t.add_weighted(&[Word::new(1)], 16), Err(TallyError::Weight(16)));
     /// ```
     pub fn add_weighted(&mut self, v: &[Word], w: u8) -> Result<(), TallyError> {
         self.check_len(v)?;
@@ -336,8 +356,8 @@ impl Tally {
     /// use monade_core::word::Word;
     /// let mut t = Tally::new(Size::WORD);
     /// assert_eq!(t.subtract(&[Word::ZERO]), Err(TallyError::NoVoices));
-    /// t.add_weighted(&[Word::ZERO], 3).unwrap();
-    /// t.subtract_weighted(&[Word::ZERO], 3).unwrap();
+    /// t.add_weighted(&[Word::ZERO], 4).unwrap();
+    /// t.subtract_weighted(&[Word::ZERO], 4).unwrap();
     /// assert_eq!(t, Tally::new(Size::WORD));
     /// ```
     pub fn subtract_weighted(&mut self, v: &[Word], w: u8) -> Result<(), TallyError> {
@@ -502,8 +522,8 @@ impl Tally {
     /// use monade_core::tally::Tally;
     /// use monade_core::word::Word;
     /// let mut t = Tally::new(Size::WORD);
-    /// t.add_weighted(&[Word::new(1)], 3).unwrap();
-    /// assert_eq!(t.decay(2), 0);
+    /// t.add_weighted(&[Word::new(1)], 4).unwrap();
+    /// assert_eq!(t.decay(3), 0);
     /// assert_eq!((t.counts()[0], t.counts()[1]), (1, -1));
     /// assert_eq!(t.decay(5), 64);
     /// assert_eq!(t.counts()[0], 0);
@@ -549,6 +569,11 @@ mod tests {
         proptest::collection::vec(any::<u64>().prop_map(Word::new), s.words())
     }
 
+    /// One of the allowed weights.
+    fn weight() -> impl Strategy<Value = u8> {
+        proptest::sample::select(WEIGHTS.to_vec())
+    }
+
     /// A size and `k` votes of that size, `k` in `lo..hi`.
     fn votes(lo: usize, hi: usize) -> impl Strategy<Value = (Size, Vec<Vec<Word>>)> {
         size().prop_flat_map(move |s| (Just(s), proptest::collection::vec(monade(s), lo..hi)))
@@ -561,6 +586,9 @@ mod tests {
         }
         t
     }
+
+    /// Hash of the counters of `golden_tally`. Never changes.
+    const GOLDEN_TALLY: u64 = 0x020a_54a0_446a_acf3;
 
     #[test]
     fn errors_are_values_and_leave_the_tally_unchanged() {
@@ -586,11 +614,48 @@ mod tests {
     }
 
     #[test]
+    fn only_powers_of_two_up_to_eight_are_weights() {
+        let mut t = Tally::new(Size::WORD);
+        for w in 0..=255u8 {
+            let ok = t.add_weighted(&[Word::ZERO], w).is_ok();
+            assert_eq!(ok, WEIGHTS.contains(&w), "weight {w}");
+        }
+    }
+
+    /// A fixed history of votes (weights, subtraction, merge, decay) and the hash
+    /// of the counters it leaves: the same on every machine, forever.
+    #[test]
+    fn golden_tally() {
+        let mut x = 0x4d4f_4e41_4445_7461u64;
+        let mut next = || {
+            x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = x;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            Word::new(z ^ (z >> 31))
+        };
+        let vs: Vec<Vec<Word>> = (0..32).map(|_| (0..8).map(|_| next()).collect()).collect();
+        let (mut a, mut b) = (Tally::new(Size::BLOCK), Tally::new(Size::BLOCK));
+        for (i, v) in vs.iter().enumerate() {
+            let w = WEIGHTS[i % 4];
+            if i % 2 == 0 {
+                a.add_weighted(v, w).unwrap()
+            } else {
+                b.add_weighted(v, w).unwrap()
+            }
+        }
+        a.subtract_weighted(&vs[0], 1).unwrap();
+        a.merge(&b).unwrap();
+        a.decay(3);
+        assert_eq!(oracle::counts_hash(a.counts()), GOLDEN_TALLY);
+    }
+
+    #[test]
     fn saturation_never_wraps() {
         let v = vec![Word::new(0xF0F0_F0F0_F0F0_F0F0); 8];
         let mut t = Tally::new(Size::BLOCK);
         for _ in 0..300 {
-            t.add_weighted(&v, LIMIT.unsigned_abs()).unwrap();
+            t.add_weighted(&v, 8).unwrap();
         }
         assert!(t.counts().iter().all(|c| c.unsigned_abs() == 127));
         assert_eq!(t.read(), v);
@@ -651,7 +716,7 @@ mod tests {
 
         /// Merge is commutative even when it saturates; the empty tally is neutral.
         #[test]
-        fn merge_is_commutative((s, vs) in votes(2, 6), w in 1u8..=127) {
+        fn merge_is_commutative((s, vs) in votes(2, 40), w in weight()) {
             let mut a = Tally::new(s);
             let mut b = Tally::new(s);
             for (i, v) in vs.iter().enumerate() {
@@ -669,7 +734,7 @@ mod tests {
 
         /// Invariant 3: add then subtract gives the original, while exact.
         #[test]
-        fn subtract_inverts_add((s, vs) in votes(1, 8), w in 1u8..=60) {
+        fn subtract_inverts_add((s, vs) in votes(1, 8), w in weight()) {
             let base = tally_of(s, &vs[1..]);
             let mut t = base.clone();
             t.add_weighted(&vs[0], w).unwrap();
@@ -680,7 +745,7 @@ mod tests {
 
         /// Invariant 4: decay moves every counter k towards 0, never across it.
         #[test]
-        fn decay_never_flips_a_sign((s, vs) in votes(0, 10), w in 1u8..=127, k in 0u8..=255) {
+        fn decay_never_flips_a_sign((s, vs) in votes(0, 24), w in weight(), k in 0u8..=255) {
             let mut t = Tally::new(s);
             for v in &vs {
                 t.add_weighted(v, w).unwrap();
@@ -700,9 +765,9 @@ mod tests {
         /// saturation, against the bit-by-bit oracle.
         #[test]
         fn fast_equals_slow(
-            (s, vs) in votes(1, 10),
-            ws in proptest::collection::vec(1u8..=127, 10),
-            signs in proptest::collection::vec(any::<bool>(), 10),
+            (s, vs) in votes(1, 24),
+            ws in proptest::collection::vec(weight(), 24),
+            signs in proptest::collection::vec(any::<bool>(), 24),
         ) {
             let mut t = Tally::new(s);
             let mut steps: Vec<(&[Word], i64)> = Vec::new();

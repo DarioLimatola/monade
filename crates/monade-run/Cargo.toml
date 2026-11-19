@@ -12,6 +12,8 @@ monade-core = { path = "../monade-core", features = ["oracle"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 csv = "1"
+# Specchio, the interface: a small, synchronous HTTP server on localhost only.
+tiny_http = "0.12"
 
 [lints]
 workspace = true

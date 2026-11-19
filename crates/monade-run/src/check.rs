@@ -8,7 +8,7 @@ use monade_core::oracle;
 use monade_core::size::{Arena, Size};
 use monade_core::space::Space;
 use monade_core::specs::{Specs, SEED_KEY};
-use monade_core::tally::Tally;
+use monade_core::tally::{Tally, WEIGHTS};
 use monade_core::word::{self, Word};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -24,6 +24,10 @@ const GOLDEN_INPUTS: u64 = 0xa028_f446_97b8_19db;
 
 /// State hash of a fixed bundle of 8 blocks: the same on every machine, forever.
 const GOLDEN_BUNDLE: u64 = 0xb055_ea70_f353_1b9b;
+
+/// Hash of the counters of a fixed tally (16 blocks, weights 1/2/4/8, decay 1):
+/// the same on every machine, forever (fixed in v0.5.1).
+const GOLDEN_TALLY: u64 = 0x667b_34a6_5879_18bf;
 
 /// One number measured by a check.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -159,7 +163,7 @@ impl Inputs {
 /// Runs every check, in order, on the foundations in `dir`.
 pub fn all(dir: &Path) -> Vec<Outcome> {
     let mut inputs = Inputs::new();
-    let checks: [fn(&mut Inputs, &Path) -> Draft; 15] = [
+    let checks: [fn(&mut Inputs, &Path) -> Draft; 16] = [
         determinism,
         xor_laws,
         fast_equals_slow,
@@ -174,6 +178,7 @@ pub fn all(dir: &Path) -> Vec<Outcome> {
         reinforcement,
         capacity,
         residue,
+        capacity_noisy,
         foundations,
     ];
     checks
@@ -286,7 +291,7 @@ fn determinism(inputs: &mut Inputs, _: &Path) -> Draft {
     );
     d.explain(
         "The mind must be reproducible: the same experience must give the same mind on any computer, so that every result can be checked by someone else and every change can be traced. If two machines disagreed here, no later test could be trusted.",
-        "A fixed stream of 4096 pseudo-random words and a bundle of 8 blocks are reduced to a 64-bit fingerprint (FNV-1a state hash). The two fingerprints are compared with values written in the code when the check was created; they must never change.",
+        "A fixed stream of 4096 pseudo-random words, a bundle of 8 blocks and a tally of 16 more blocks (weights 1, 2, 4, 8, then a decay) are reduced to 64-bit fingerprints (FNV-1a). The fingerprints are compared with values written in the code when they were created; they must never change.",
     );
     let mut fresh = Inputs::new();
     let stream: Vec<Word> = (0..4096).map(|_| fresh.word()).collect();
@@ -296,11 +301,21 @@ fn determinism(inputs: &mut Inputs, _: &Path) -> Draft {
     let mut bundle = vec![Word::ZERO; Size::BLOCK.words()];
     let ok = word::majority(&refs, &mut bundle).is_ok();
     let h2 = oracle::state_hash(&bundle);
-    d.passed = ok && h1 == GOLDEN_INPUTS && h2 == GOLDEN_BUNDLE;
-    d.result = format!("inputs hash {h1:#018x}, bundle hash {h2:#018x}");
-    d.expected = format!("{GOLDEN_INPUTS:#018x} and {GOLDEN_BUNDLE:#018x}");
+    // A tally of 16 more blocks, weights 1, 2, 4, 8 in turn, then decay by 1.
+    let mut tally = Tally::new(Size::BLOCK);
+    let mut tally_ok = true;
+    for i in 0..16 {
+        let v = fresh.monade(Size::BLOCK);
+        tally_ok &= tally.add_weighted(&v, WEIGHTS[i % 4]).is_ok();
+    }
+    tally.decay(1);
+    let h3 = oracle::counts_hash(tally.counts());
+    d.passed = ok && tally_ok && h1 == GOLDEN_INPUTS && h2 == GOLDEN_BUNDLE && h3 == GOLDEN_TALLY;
+    d.result = format!("inputs hash {h1:#018x}, bundle hash {h2:#018x}, tally hash {h3:#018x}");
+    d.expected = format!("{GOLDEN_INPUTS:#018x}, {GOLDEN_BUNDLE:#018x} and {GOLDEN_TALLY:#018x}");
     d.measure("inputs state hash", format!("{h1:#018x}"));
     d.measure("bundle state hash", format!("{h2:#018x}"));
+    d.measure("tally counters hash", format!("{h3:#018x}"));
     let _ = inputs;
     d
 }
@@ -1262,6 +1277,105 @@ fn residue(inputs: &mut Inputs, _: &Path) -> Draft {
     d
 }
 
+/// Pre-registered for `memory.capacity_noisy` (written before the first run, from
+/// the exact formula; co-signed by the statistician): separation in tenths of sigma
+/// of k noisy voices in 512 bits, sqrt(512) (1 - 2p) (1 - 2 q(k)), where p is the
+/// noise of each voice and q(k) the disagreement of a clean voice with the reading.
+/// Rows: noise 0, 26/256 (10%), 51/256 (20%); columns: k = 2, 4, 8, 12, 16.
+const NOISY_SEPARATION: [(u64, [u64; 5]); 3] = [
+    (0, [113, 85, 62, 51, 44]),
+    (26, [90, 68, 49, 41, 35]),
+    (51, [68, 51, 37, 31, 27]),
+];
+
+/// Numbers of voices of `memory.capacity_noisy`.
+const NOISY_VOICES: [usize; 5] = [2, 4, 8, 12, 16];
+
+fn capacity_noisy(inputs: &mut Inputs, _: &Path) -> Draft {
+    let mut d = Draft::new(
+        "memory.capacity_noisy",
+        "memory",
+        "When the voices themselves are noisy, a 512-bit tally holds fewer of them: with 10% noise 8 voices are still found, with 20% they start to be lost.",
+    );
+    d.explain(
+        "Real voices are never exact copies: a reader, a source or an expert says something close to its idea, not the idea itself. Before fixing 8 voices per 512-bit level of the blackboard, the council asked how much noise that block can bear. Noise and crowding add up: each multiplies the separation between a voice and a stranger.",
+        "For each noise level (0, 10%, 20% of the bits of each voice flipped) and each number of voices k (2 to 16), in 40 trials, k random ideas are taken; what is counted in the tally is a noisy copy of each; the clean idea must be closer to the reading than all of 100 random decoys. Separation = (half the bits - mean distance of the clean ideas) / sigma of a decoy. Expected separations written before the first run, from the exact formula sqrt(n) (1 - 2p) (1 - 2q(k)); each measured one must be within 0.5 sigma. With 10% noise, 8 voices at least 95% found (expected 98%); with 20%, 8 voices between 75% and 95% (expected 86%). Control that must fail: 20% noise with 16 voices, at most 75% (expected 55%).",
+    );
+    let trials = 40u64;
+    let bits = Size::BLOCK.bits();
+    let root = isqrt(100 * bits);
+    let mut series = Vec::new();
+    let mut parts = Vec::new();
+    for (per256, expected) in NOISY_SEPARATION {
+        let mut counts = Vec::new();
+        let mut line = Vec::new();
+        for (k, want) in NOISY_VOICES.iter().zip(expected) {
+            let k = *k;
+            let (mut found, mut tried, mut sum) = (0u64, 0u64, 0u64);
+            for _ in 0..trials {
+                let ideas: Vec<Vec<Word>> = (0..k).map(|_| inputs.monade(Size::BLOCK)).collect();
+                let heard: Vec<Vec<Word>> = ideas.iter().map(|v| inputs.noisy(v, per256)).collect();
+                let read = tally_of(Size::BLOCK, &heard).read();
+                let nearest = (0..100)
+                    .map(|_| word::hamming(&read, &inputs.monade(Size::BLOCK)).unwrap_or(0))
+                    .min()
+                    .unwrap_or(0);
+                for v in &ideas {
+                    let h = word::hamming(&read, v).unwrap_or(bits);
+                    sum += h;
+                    tried += 1;
+                    found += u64::from(h < nearest);
+                }
+            }
+            let per_mille = found * 1000 / tried.max(1);
+            let sep = (bits * tried / 2).saturating_sub(sum) * 200 / (tried * root).max(1);
+            d.passed &= sep.abs_diff(want) <= 5;
+            match (per256, k) {
+                (26, 8) => d.passed &= per_mille >= 950,
+                (51, 8) => d.passed &= (750..=950).contains(&per_mille),
+                (51, 16) => d.passed &= per_mille <= 750,
+                _ => {}
+            }
+            counts.push((per_mille + 5) / 10);
+            line.push(format!(
+                "{k}: {}% ({} vs {})",
+                tenths(per_mille),
+                tenths(sep),
+                tenths(want)
+            ));
+        }
+        let noise = per256 * 1000 / 256;
+        series.push(Series {
+            name: format!("noise {}%", (noise + 5) / 10),
+            counts,
+        });
+        d.measure(
+            &format!(
+                "noise {}%: voices: found (sigma measured vs expected)",
+                tenths(noise)
+            ),
+            line.join(", "),
+        );
+        parts.push(format!("noise {}%: {}", (noise + 5) / 10, line[2]));
+    }
+    d.charts.push(Histogram {
+        title: format!(
+            "Noisy voices recovered from one 512-bit tally ({trials} trials, 100 decoys each)"
+        ),
+        unit: "% of voices found again".into(),
+        start: 0,
+        width: 1,
+        series,
+        labels: NOISY_VOICES.iter().map(|k| format!("k={k}")).collect(),
+    });
+    d.result = format!(
+        "8 voices in 512 bits, by noise of each voice: {}",
+        parts.join("; ")
+    );
+    d.expected = "every separation within 0.5 sigma of the formula; 10% noise: 8 voices at least 95%; 20%: 8 voices 75-95%; control 20% with 16 voices at most 75%".into();
+    d
+}
+
 fn foundations(_: &mut Inputs, dir: &Path) -> Draft {
     let mut d = Draft::new(
         "foundations.read",
@@ -1315,7 +1429,7 @@ mod tests {
     fn every_check_passes_on_a_new_mind() {
         let dir = std::env::temp_dir().join(format!("monade-check-{}", std::process::id()));
         let out = all(&dir);
-        assert_eq!(out.len(), 15);
+        assert_eq!(out.len(), 16);
         for o in &out {
             assert!(o.passed, "{}: {}", o.id, o.result);
         }

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.2 — 2026-11-19
+
+- Specchio gains the room **Commands**: buttons for Verify (check), Doctor, Foundations
+  and Stars (with the catalog path), the output shown below. A fixed list of commands,
+  accepted only as POST with the header `X-Monade: 1`, which other web pages cannot
+  send: no site can start a command.
+- `Specchio.cmd`: double click to build and open Specchio on Windows.
+- `monade-run tools` returns the output of the tools (so Specchio can show it) and,
+  when uv is missing, says only how to install it (no full usage text).
+- Tools: the data folder defaults to `C:\monade-data` when there is no D: drive; the
+  free disk is measured on the nearest existing folder.
+
+## 0.5.1 — 2026-11-19
+
+- Step 5b. Tally weights restricted to 1, 2, 4 or 8 (`tally::WEIGHTS`): more than 3
+  bits of weight add no accuracy, and small weights leave room for at least 15 votes
+  before a counter saturates. Property tests use only these weights.
+- Golden hash of a fixed tally: unit test (`golden_tally`) and a third fingerprint in
+  `determinism.golden`; `oracle::counts_hash`.
+- New check `memory.capacity_noisy`: how many noisy voices a 512-bit tally holds
+  (noise 0, 10%, 20%; 2 to 16 voices); separations predicted by an exact formula
+  written before the first run; a control that must fail. 16 checks.
+- `tools/`: Python tools run with uv, outside the mind: `monade-tools doctor` and
+  dataset cards (`card new`, `card check`, BLAKE3 per file; format in
+  `docs/data-cards.md`). `monade-run tools ...` runs them.
+- Specchio, the interface (skeleton): `monade-run specchio` serves six rooms on
+  127.0.0.1 only (Mind = the report, Worlds = the stars, Foundations; Lessons,
+  Blackboard and Memory say which step brings them) and opens the browser.
+- Report: glossary gains "weight" and "noisy voice".
+- Docs: the design consolidated in `docs/design/structure-v6.md`; product and council
+  documents removed from the repository. `runs/` no longer tracked by git.
+
 ## 0.5.0 — 2026-11-18
 
 - Step 5, the first learning: counters per bit (`monade_core::tally`). One signed

@@ -1,0 +1,23 @@
+# The Python tools of the Monade: downloads, dataset cards, baselines, analyses.
+# They live outside the mind: they write files (Parquet, JSON) that the Rust
+# program reads. Run them with uv, from the repository root:
+#   uv run --project tools monade-tools doctor
+[project]
+name = "monade-tools"
+version = "0.5.2"
+description = "Tools of the Monade: dataset cards, downloads, baselines. Never inside the mind."
+requires-python = ">=3.11"
+dependencies = [
+    # BLAKE3, the same hash the mind uses, for the files of every dataset card.
+    "blake3>=1.0",
+]
+
+[project.scripts]
+monade-tools = "monade_tools.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/monade_tools"]

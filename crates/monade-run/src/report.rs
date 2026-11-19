@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 const COLUMNS: usize = 32;
 
 /// Escapes text for HTML.
-fn esc(s: &str) -> String {
+pub(crate) fn esc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -33,7 +33,7 @@ fn ms(micros: u64) -> String {
     format!("{}.{} ms", micros / 1000, (micros % 1000) / 100)
 }
 
-const STYLE: &str = "
+pub(crate) const STYLE: &str = "
 :root{--bg:#121212;--fg:#e6e6e6;--mute:#8a8a8a;--line:#2a2a2a;--pass:#0072B2;--fail:#D55E00;--none:#2e2e2e}
 @media (prefers-color-scheme: light){:root{--bg:#fafafa;--fg:#1a1a1a;--mute:#6b6b6b;--line:#dddddd;--none:#e8e8e8}}
 *{box-sizing:border-box}
@@ -95,6 +95,8 @@ const GLOSSARY: &[(&str, &str)] = &[
     ("Residue", "Voice XOR reading: the bits of a voice the majority discarded. The base form of Mutation; how the minority is heard."),
     ("Uncertain mask", "The bits whose counters are near 0: where the voices disagree."),
     ("Control", "A run built so that the claim must fail (random voices, too small a size); if it passed, the check would prove nothing."),
+    ("Weight", "How much one vote counts: 1, 2, 4 or 8, by how reliable the voice has proven on verified outcomes; never by its agreement with the majority."),
+    ("Noisy voice", "A voice that says something close to its idea, not the idea itself: a share of its bits is flipped."),
 ];
 
 /// Okabe-Ito colours for the series, in order.
